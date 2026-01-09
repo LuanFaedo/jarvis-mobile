@@ -1,0 +1,1 @@
+<conteúdo do script acima>

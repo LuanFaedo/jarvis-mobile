@@ -1,0 +1,9 @@
+{
+  "project_name": "Jarviz",
+  "current_version": "11.0 STABLE",
+  "official_memory_file": "memoria/memoria.json",
+  "official_config_file": "memoria/config_jarvis.json",
+  "ai_engine": "Ollama (Llama 3.2:latest)",
+  "status": "Memória Blindada e Sistema Estabilizado",
+  "instructions": "Sempre carregar o histórico e conhecimento de memoria/memoria.json. Patrick é o único mestre."
+}

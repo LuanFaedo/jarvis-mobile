@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "huggingface": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@huggingface/hf-mcp-server"
+      ],
+      "env": {
+        "HF_TOKEN": "AAAAC3NzaC1lZDI1NTE5AAAAIJ9KfyhZeNo5E84kORaqKYu7gxopcvqT2hRabwJU/sXF"
+      }
+    },
+    "whatsapp-bot": {
+      "command": "node",
+      "args": [
+        "index.js"
+      ]
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "admin": {
+    "nome": "Administrador",
+    "senha": "admin",
+    "criado_em": "2024-01-05"
+  },
+  "Admin": {
+    "senha": "Admin",
+    "criado_em": "2026-01-05"
+  },
+  "K": {
+    "senha": "Admin",
+    "criado_em": "2026-01-05"
+  },
+  "1234": {
+    "senha": "1234",
+    "criado_em": "2026-01-06"
+  }
+}

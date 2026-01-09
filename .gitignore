@@ -1,0 +1,27 @@
+# Node
+node_modules/
+npm-debug.log
+
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.env
+
+# WhatsApp Session (Segurança e Cache)
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Jarvis Data
+audios/
+memoria/*.json
+!memoria/config_jarvis.json
+!memoria/users.json
+
+# Logs
+*.log
+log_erro_sistema.txt
+
+# System
+.DS_Store
+Thumbs.db
