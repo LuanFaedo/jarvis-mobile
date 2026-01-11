@@ -1,4 +1,5 @@
 from flask import Flask, render_template, send_from_directory, request, jsonify, session, redirect, url_for, flash
+from flask_cors import CORS
 from flask_socketio import SocketIO, emit
 from pycloudflared import try_cloudflare
 from dotenv import load_dotenv
@@ -65,76 +66,56 @@ from iot.tv_controller import TVController
 # Substitui a API do Google (que deu erro 404) pelo Cérebro Local Potente
 import requests
 
+# --- Configurações de API (LOCAL / CLOUD) ---
+API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:11434/v1")
+# Para modelos no Ollama local, a API_KEY pode ser qualquer string ou vazia
+API_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJ9KfyhZeNo5E84kORaqKYu7gxopcvqT2hRabwJU/sXF" 
+MODELO_ATIVO = "gpt-oss:120b-cloud"
+
+client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+client_ollama = ollama.Client(host=API_BASE_URL.replace("/v1", ""))
+
 def consultar_gemini_nuvem(prompt):
     """
-    Usa o Ollama Local como Supervisor Técnico.
-    Simula uma 'Nuvem' mas roda localmente, garantindo funcionamento 100%.
+    Supervisor Técnico. Tenta a Nuvem primeiro, fallback para local.
     """
-    print(f"[SUPERVISOR LOCAL] Analisando pedido: {prompt[:50]}...", flush=True)
+    print(f"[SUPERVISOR] Consultando: {prompt[:50]}...", flush=True)
     try:
-        # Usa o modelo mais forte disponível (ou o ativo)
-        modelo_supervisor = MODELO_ATIVO if MODELO_ATIVO else "gpt-oss:120b-cloud"
-        
         payload = {
-            "model": modelo_supervisor,
-            "prompt": f"SYSTEM: Você é um Arquiteto de Software Sênior Python. O usuário precisa de um script ou comando. NÃO explique, apenas gere o código.\nPEDIDO: {prompt}",
-            "stream": False,
-            "options": {"temperature": 0.1} # Temperatura baixa para código preciso
+            "model": MODELO_ATIVO,
+            "prompt": f"SYSTEM: Arquiteto Sênior. Gere apenas o código.\\nPEDIDO: {prompt}",
+            "stream": False
         }
-        
-        resp = requests.post("http://127.0.0.1:11434/api/generate", json=payload, timeout=120)
+        # Tenta usar a mesma base_url configurada
+        endpoint = API_BASE_URL.replace("/v1", "") + "/api/generate"
+        resp = requests.post(endpoint, json=payload, timeout=60)
         if resp.status_code == 200:
             return resp.json().get('response', '')
-        else:
-            return f"Erro no Supervisor Local: {resp.text}"
-            
     except Exception as e:
-        return f"Erro crítico no Supervisor: {e}"
+        print(f"[ERRO SUPERVISOR] {e}")
+    return "Erro ao consultar supervisor."
 
-load_dotenv()
-
-# --- Módulo de Manipulação Total ---
-from sistema.core import ManipuladorTotal
-manipulador = ManipuladorTotal(os.path.dirname(os.path.abspath(__file__)))
-
-# --- Sincronização de Tempo Real ---
-OFFSET_TEMPORAL = timedelta(0)
-
-def sincronizar_horario():
-    global OFFSET_TEMPORAL
-    try:
-        print("[TIME] Sincronizando relógio com servidores globais...", flush=True)
-        with urllib.request.urlopen("http://google.com", timeout=3) as conn:
-            date_header = conn.headers['Date']
-            data_real_utc = parsedate_to_datetime(date_header)
-            data_sistema_utc = datetime.now(timezone.utc)
-            OFFSET_TEMPORAL = data_real_utc - data_sistema_utc
-            print(f"[TIME] Sincronizado! Desvio: {OFFSET_TEMPORAL.total_seconds():.2f}s", flush=True)
-    except Exception as e:
-        print(f"[TIME] Falha na sincronização online ({e}).", flush=True)
-
-sincronizar_horario()
-
-# --- Configurações de Pastas ---
-# BASE_DIR já foi definido no topo
+# --- Configurações de Caminho ---
 AUDIO_DIR = os.path.join(BASE_DIR, "audios")
-HISTORY_DIR = os.path.join(BASE_DIR, "memoria")
-CONFIG_FILE = os.path.join(HISTORY_DIR, "config_jarvis.json")
-KNOWLEDGE_FILE = os.path.join(HISTORY_DIR, "memoria.json")
+HISTORY_DIR = os.path.join(BASE_DIR, "historico")
+KNOWLEDGE_FILE = os.path.join(BASE_DIR, "memoria/conhecimento.json")
+CONFIG_FILE = os.path.join(BASE_DIR, "memoria/config_jarvis.json")
 
-MAX_CHAR_INPUT = 1500
+# --- Parâmetros de Sistema ---
+RESUMO_INTERVAL = 20
 BUFFER_SIZE = 10
-RESUMO_INTERVAL = 10
-
-client = OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="ollama")
-MODELO_ATIVO = "gpt-oss:120b-cloud" # EXIGÊNCIA DO USUÁRIO (Melhor qualidade)
-client_ollama = ollama.Client(host='http://127.0.0.1:11434')
+OFFSET_TEMPORAL = timedelta(hours=0)
+MAX_CHAR_INPUT = 5000
 
 for folder in [AUDIO_DIR, HISTORY_DIR]:
     if not os.path.exists(folder): os.makedirs(folder)
 
-app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"), static_folder=os.path.join(BASE_DIR, "static"))
+app = Flask(__name__, 
+            template_folder=os.path.join(BASE_DIR, "templates"), 
+            static_folder=os.path.join(BASE_DIR, "static"),
+            static_url_path='/static')
 app.secret_key = 'jarvis_v11_ultra'
+CORS(app, resources={r"/*": {"origins": "*"}}) 
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
 
 # --- Gestão de Conhecimento ---
@@ -155,8 +136,16 @@ def extrair_fatos_da_mensagem(user_id: str, texto: str):
     prompt_extracao = f"""Analise a mensagem do usuário e extraia FATOS para memória de longo prazo.\nTexto: "{texto}"\nRetorne APENAS um JSON puro lista de objetos: [{{"tipo": "...", "chave": "...", "valor": "..."}}]"""
     try:
         modelo_usado = MODELO_ATIVO if MODELO_ATIVO else "gpt-oss:120b-cloud"
-        resp = client.chat.completions.create(model=modelo_usado, messages=[{"role": "user", "content": prompt_extracao}], temperature=0, response_format={"type": "json_object"})
-        dados = json.loads(resp.choices[0].message.content)
+        # Removido response_format para evitar erro 404/400 em APIs que não suportam
+        resp = client.chat.completions.create(
+            model=modelo_usado, 
+            messages=[{"role": "user", "content": prompt_extracao}], 
+            temperature=0
+        )
+        content = resp.choices[0].message.content
+        # Limpa possível markdown de bloco de código
+        content = content.replace("```json", "").replace("```", "").strip()
+        dados = json.loads(content)
         lista_fatos = dados if isinstance(dados, list) else dados.get('fatos', [])
         if isinstance(lista_fatos, list):
             for fato in lista_fatos:
@@ -237,6 +226,24 @@ def processar_comandos_sistema(resposta_llm, user_id, profundidade=0):
     # LISTA NEGRA DE SEGURANÇA REFINADA
     # Bloqueia apenas comandos destrutivos reais, permitindo "Format-Table" etc.
     COMANDOS_PROIBIDOS = ["format c:", "format d:", "del /s", "rm -rf", "shutdown /", "shutdown -"]
+
+    # 0. Busca na Web (NOVO - Prioridade para dados externos)
+    searches = re.findall(r'\[\[SEARCH: (.*?)\]\]', resposta_llm, re.DOTALL)
+    for query in searches:
+        print(f"[DEBUG] Processando busca: {query}", flush=True)
+        try:
+            res_busca = pesquisar_web(query.strip())
+            if not res_busca or len(res_busca) < 5:
+                # Silencia aviso, apenas loga
+                print(f"[BUSCA VAZIA] '{query}' não retornou dados.", flush=True)
+                res_busca = ""
+        except Exception as e:
+            print(f"[ERRO BUSCA SILENCIOSO] {e}", flush=True)
+            res_busca = ""
+            
+        if res_busca:
+            print(f"[DEBUG] Resultado Busca (primeiros 50 chars): {res_busca[:50]}...", flush=True)
+            output_extra += f"\n**RESULTADO DA BUSCA WEB:**\n{res_busca}\n"
 
     # 1. Execução de Terminal
     cmds = re.findall(r'\[\[CMD: (.*?)\]\]', resposta_llm, re.DOTALL)
@@ -325,14 +332,15 @@ def gerar_resposta_jarvis(user_id, texto):
 
 === DIRETRIZES DE PERSONALIDADE (MODO EXECUTIVO) ===
 1. SEJA DIRETO: Não explique o comando que vai usar. Apenas use.
-2. AÇÃO IMEDIATA: Se o usuário perguntar "Tenho o arquivo X?", NÃO PERGUNTE "Quer que eu procure?". PROCURE IMEDIATAMENTE com [[CMD: ...]].
+2. AÇÃO IMEDIATA: Se o usuário perguntar algo que requer internet (preços, notícias, clima), USE [[SEARCH: ...]] IMEDIATAMENTE.
 3. SEM BUROCRACIA: Você tem acesso total. Não peça permissão para ler pastas ou listar arquivos.
 4. RESPOSTA CURTA: Se for uma pergunta simples, resposta simples. Deixe textos longos APENAS para quando gerar código/scripts.
 5. PROATIVIDADE: Se encontrar um caminho ambíguo, liste as opções encontradas em vez de perguntar "qual você quer?".
 
 === COMANDOS (USE SEM MEDO) ===
+- [[SEARCH: preço arroz francisco beltrão]] -> USE ISTO para buscar preços, notícias ou fatos atuais na internet.
 - [[CMD: python sistema/analise_disco.py]] -> USE ISTO para ver arquivos grandes/espaço em disco. (Muito mais rápido que PowerShell).
-- [[CMD: dir C:\...]] -> Para listar/procurar arquivos comuns.
+- [[CMD: dir C:\\...]] -> Para listar/procurar arquivos comuns.
 - [[READ: arquivo]] -> Para ler.
 - [[WRITE: arquivo | conteudo]] -> Para criar scripts.
 - [[ASK_GEMINI: ...]] -> Apenas se travar muito.
@@ -380,7 +388,7 @@ INSTRUÇÕES FINAIS:
                 descricao_visual = f"\n[SISTEMA VISUAL]: Descrição da tela: {analisar_imagem(imagem_b64)}"
 
     # 2. Gatilho para ver arquivo local
-    match_arq = re.search(r'([a-zA-Z]:\\[^:<>"|?*]+\.(png|jpg|jpeg|bmp|webp))', texto, re.IGNORECASE)
+    match_arq = re.search(r'([a-zA-Z]:\\(?:[^:<>"|?*]+)\.(?:png|jpg|jpeg|bmp|webp))', texto, re.IGNORECASE)
     if match_arq:
         caminho_img = match_arq.group(1)
         if os.path.exists(caminho_img):
@@ -402,7 +410,7 @@ INSTRUÇÕES FINAIS:
 
     # 1. Espelhamento Android (SCRCPY)
     if any(k in texto_lower for k in ["espelhar celular", "espelhar tela", "abrir scrcpy", "tela do celular", "ver celular"]):
-        threading.Thread(target=lambda: subprocess.Popen("ESPELHAR_CELULAR.bat", shell=True)).start()
+        threading.Thread(target=lambda: subprocess.Popen(os.path.join("scripts", "ESPELHAR_CELULAR.bat"), shell=True)).start()
         return "SISTEMA: Iniciando protocolo de espelhamento Android (SCRCPY)..."
         
     # 2. Limpeza de Sistema
@@ -472,18 +480,19 @@ async def _tts_async(text, path):
 def gerar_audio_b64(text):
     if not text or len(text.strip()) == 0: return None
     
-    # FILTRO INTELIGENTE: Não fala logs de sistema ou comandos técnicos
-    if any(prefix in text for prefix in ["[SISTEMA]", "[CMD]", "[ERRO]", "SISTEMA:", "Traceback", "Error:", "> Comando"]):
-        print(f"[AUDIO] Ignorado (Texto Técnico): {text[:30]}...", flush=True)
-        return None
+    # FILTRO INTELIGENTE: Remove tags técnicas mas FALA o conteúdo útil
+    # Remove tags comuns de log/sistema para não serem lidas em voz alta
+    text_limpo = text
+    for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**"]:
+        text_limpo = text_limpo.replace(tag, "")
 
     # Limpa markdown e códigos para não bugar o áudio
-    text_limpo = re.sub(r'```.*?```', '', text, flags=re.DOTALL) # Remove blocos de código
+    text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL) # Remove blocos de código
     text_limpo = re.sub(r'\[\[.*?\]\]', '', text_limpo) # Remove comandos [[CMD]]
-    text_limpo = re.sub(r'[^\w\s,.?!]', '', text_limpo) # Remove símbolos estranhos
+    text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ]', '', text_limpo) # Remove símbolos estranhos (Mantendo acentos)
     text_limpo = text_limpo.strip()
 
-    if not text_limpo: return None
+    if not text_limpo or len(text_limpo) < 2: return None # Se sobrou nada ou só 1 letra, ignora
     
     print(f"[AUDIO] Gerando voz para: {text_limpo[:50]}...", flush=True)
 
@@ -601,6 +610,11 @@ def extrair_texto_ocr(caminho_ou_imagem):
         return f"[ERRO OCR] Falha: {e}"
 
 # --- Rotas ---
+
+@app.route('/favicon.ico')
+def favicon():
+    return send_from_directory(os.path.join(app.root_path, 'static'),
+                               'favicon.ico', mimetype='image/vnd.microsoft.icon')
 
 @app.route('/')
 def index(): return render_template('index.html')
@@ -721,7 +735,10 @@ if __name__ == '__main__':
         print(f"\nACESSO REMOTO LIBERADO: {public_url}\n", flush=True)
         
         # Salva o link num arquivo para facil acesso
-        with open("LINK_JARVIS.txt", "w") as f:
+        link_path = os.path.join("docs", "LINK_JARVIS.txt")
+        # Garante que a pasta existe
+        if not os.path.exists("docs"): os.makedirs("docs")
+        with open(link_path, "w") as f:
             f.write(public_url)
             
     except Exception as e:

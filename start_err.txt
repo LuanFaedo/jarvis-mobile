@@ -1,2 +1,0 @@
-C:\WORD\app.py:329: SyntaxWarning: invalid escape sequence '\.'
-  threading.Thread(target=processar_memoria, args=(user_id,), daemon=True).start()

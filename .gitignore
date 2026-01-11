@@ -8,6 +8,13 @@ __pycache__/
 venv/
 .env
 
+# Build Artifacts
+*.exe
+!tools/**/*.exe
+build/
+dist/
+*.spec
+
 # WhatsApp Session (Segurança e Cache)
 .wwebjs_auth/
 .wwebjs_cache/
@@ -18,9 +25,12 @@ memoria/*.json
 !memoria/config_jarvis.json
 !memoria/users.json
 
-# Logs
+# Logs & Temp
 *.log
+_lixo/
+logs/
 log_erro_sistema.txt
+docs/LINK_JARVIS.txt
 
 # System
 .DS_Store

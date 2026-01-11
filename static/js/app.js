@@ -70,6 +70,13 @@ function addToHistory(text) {
     }
 }
 
+// --- MONITOR DE ERROS 404 ---
+window.addEventListener('error', function(e) {
+    if (e.target.tagName === 'IMG' || e.target.tagName === 'LINK' || e.target.tagName === 'SCRIPT') {
+        addLog(`ERRO 404: Falha ao carregar recurso: ${e.target.src || e.target.href}`);
+    }
+}, true);
+
 // --- CORE ACTIONS ---
 function sendText() {
     const text = textInput.value.trim();
@@ -158,12 +165,18 @@ socket.on('play_audio_remoto', (data) => {
     stopAudio();
     try {
         currentAudio = new Audio(data.url);
-        currentAudio.onended = () => {
-            micBtn.classList.remove('listening'); // Garante estado limpo
+        currentAudio.onerror = (e) => {
+            addLog("ERRO DE ÁUDIO: Falha ao carregar ou tocar o arquivo gerado.");
+            setStatus('ERRO DE ÁUDIO', 'error');
         };
-        currentAudio.play();
+        currentAudio.onended = () => {
+            micBtn.classList.remove('listening'); 
+        };
+        currentAudio.play().catch(e => {
+            addLog("AUTOPLAY BLOQUEADO: Clique na tela para permitir áudio.");
+        });
     } catch (e) {
-        addLog("Erro ao tocar áudio: " + e.message);
+        addLog("Erro ao criar objeto de áudio: " + e.message);
     }
 });
 
@@ -171,6 +184,13 @@ socket.on('play_audio_remoto', (data) => {
 socket.on('log', (data) => {
     addLog("[SERVER] " + data.data);
 });
+
+function resetMemory() {
+    if (confirm("Tem certeza que deseja resetar toda a memória do Jarvis? Isso é irreversível.")) {
+        socket.emit('fala_usuario', { text: "SISTEMA: LIMPAR MINHA MEMÓRIA AGORA" });
+        addLog("Solicitado reset de memória...");
+    }
+}
 
 // --- INIT ---
 document.addEventListener('DOMContentLoaded', () => {
