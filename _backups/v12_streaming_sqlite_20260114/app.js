@@ -31,68 +31,6 @@ const WAKE_WORDS = [
     "garvis", "jabes", "chaves", "jair" 
 ];
 
-// --- MUTEX DE AUDIO (Modo Barge-In: Escuta Ativa) ---
-const AudioMutex = {
-    locked: false,
-    
-    lock: function() {
-        if (this.locked) return;
-        this.locked = true;
-        isSpeaking = true;
-        
-        console.log("[MUTEX] 🟢 Iniciando fala (Microfone PERMANECE ATIVO para Barge-In)");
-        
-        // Em vez de parar, GARANTE que está escutando para poder ser interrompido
-        if (!isMicActive && recognition) {
-            try { 
-                recognition.start(); 
-                isMicActive = true;
-                micBtn.classList.add('listening');
-            } catch(e) { console.log("Erro ao ativar mic para barge-in:", e); }
-        }
-    },
-    
-    unlock: function() {
-        if (!this.locked) return;
-        console.log("[MUTEX] 🏁 Fala finalizada");
-        this.locked = false;
-        isSpeaking = false;
-    }
-};
-
-// --- FUNÇÃO DE INTERRUPÇÃO (BARGE-IN) ---
-function handleInterruption() {
-    console.log("🛑 BARGE-IN DETECTADO! Interrompendo sistema...");
-    
-    // 1. Para o áudio atual imediatamente
-    if (currentAudio) {
-        currentAudio.pause();
-        currentAudio.currentTime = 0;
-        currentAudio = null;
-    }
-    
-    // 2. Limpa a fila de áudios pendentes (Respostas longas)
-    window.audioQueue = [];
-    window.isPlayingQueue = false;
-    
-    // 3. Libera estado
-    AudioMutex.unlock();
-    isSpeaking = false;
-    isAwake = true; // Já entra em modo de atenção
-    
-    // 4. Feedback Imediato
-    addLog("⛔ INTERRUPÇÃO PELO USUÁRIO");
-    setStatus("COMO POSSO AJUDAR?", "online");
-    
-    // 5. Resposta Sonora Local (Zero Latência)
-    const utterance = new SpeechSynthesisUtterance("Pois não?");
-    utterance.lang = "pt-BR";
-    utterance.rate = 1.3;
-    window.speechSynthesis.speak(utterance);
-    
-    // 6. Opcional: Avisar backend para parar streaming (se houvesse rota)
-}
-
 // --- AUDIO MGMT ---
 function stopAudio() {
     if (currentAudio) {
@@ -100,9 +38,14 @@ function stopAudio() {
         currentAudio.currentTime = 0;
         currentAudio = null;
     }
-    // Libera flags
-    isSpeaking = false;
-    AudioMutex.locked = false;
+    // Garante que se parou forçado (botão), libera o microfone
+    if (isSpeaking) {
+        isSpeaking = false;
+        if (isMicActive && recognition) {
+            try { recognition.start(); } catch(e){}
+        }
+        addLog("Áudio interrompido. Microfone liberado.");
+    }
 }
 
 // --- UI HELPERS ---
@@ -202,6 +145,14 @@ function initSpeechRecognition() {
         };
 
         recognition.onresult = (event) => {
+            // BLOQUEIO DE ECO: Se o bot está falando, IGNORA tudo o que o mic ouve
+            if (isSpeaking) {
+                console.log("[ECO BLOCK] Ignorando entrada pois o sistema está falando.");
+                // Opcional: Limpar buffer visual para não confundir user
+                // textInput.value = ""; 
+                return;
+            }
+
             clearTimeout(silenceTimer);
 
             let interimTranscript = '';
@@ -215,35 +166,17 @@ function initSpeechRecognition() {
                 }
             }
             
-            const currentText = (finalTranscript || interimTranscript).trim();
-            const lowerText = currentText.toLowerCase();
-            
-            // --- LÓGICA DE BARGE-IN (INTERRUPÇÃO) ---
-            if (isSpeaking) {
-                // Verifica se ouviu "Jarvis" ou variações ENQUANTO fala
-                const detectedWord = WAKE_WORDS.find(word => lowerText.includes(word));
-                
-                if (detectedWord) {
-                    console.log(`[BARGE-IN] Gatilho '${detectedWord}' detectado durante fala!`);
-                    handleInterruption();
-                    // Limpa o reconhecimento para não processar "Jarvis" como comando novamente
-                    textInput.value = "";
-                    recognition.stop(); 
-                    return;
-                }
-                
-                // Se não for Jarvis, ignora (considera ECO da própria voz)
-                console.log(`[ECO FILTER] Ignorando '${currentText}' durante fala.`);
-                return; 
-            }
-
+            // Debug imediato da população de dados
+            const currentText = (finalTranscript || interimTranscript);
             console.log(`[DEBUG MIC - POPULANDO]: ${currentText}`); 
             textInput.value = currentText;
             
             // Inicia Timer de Silêncio
             silenceTimer = setTimeout(() => {
-                if (textInput.value.trim() !== "") {
+                // Verificação extra de isSpeaking dentro do timer
+                if (!isSpeaking && textInput.value.trim() !== "") {
                     processVoiceCommand(textInput.value);
+                    // Reinicia buffer
                     recognition.stop(); 
                 }
             }, SILENCE_DELAY);
@@ -438,10 +371,11 @@ function processAudioQueue() {
     if (!window.audioQueue || window.audioQueue.length === 0) {
         window.isPlayingQueue = false;
         
-        // FIM DA FILA: LIBERA O MICROFONE (UNLOCK MUTEX)
-        if (AudioMutex.locked) {
-             AudioMutex.unlock();
-             addLog("✅ Fala concluída.");
+        // FIM DA FILA: LIBERA O MICROFONE APÓS TUDO ACABAR
+        // (Só se estava bloqueado antes)
+        if (isSpeaking) {
+             isSpeaking = false;
+             addLog("✅ Fala concluída. Microfone Ativo.");
         }
         return;
     }
@@ -449,29 +383,37 @@ function processAudioQueue() {
     window.isPlayingQueue = true; 
 
     const nextAudio = window.audioQueue.shift();
+    // stopAudio() anterior poderia resetar a flag errada, então gerenciamos manual aqui
     if (currentAudio) {
         currentAudio.pause();
         currentAudio = null;
     }
 
-    // INÍCIO DA FALA: BLOQUEIA MICROFONE (LOCK MUTEX)
-    if (!AudioMutex.locked) {
-        AudioMutex.lock();
-        addLog("🔊 Bot falando... (Microfone Pausado)");
-    }
-
     currentAudio = new Audio(nextAudio.url);
+    
+    // INÍCIO DA FALA: BLOQUEIA O MICROFONE
+    if (!isSpeaking) {
+        isSpeaking = true;
+        addLog("🔊 Bot falando... (Microfone Ignorado)");
+    }
     
     currentAudio.onended = () => {
         // Verifica se ainda tem áudio na fila
         if (window.audioQueue.length > 0) {
-            // Continua falando, mantém Lock
+            // Continua falando, não libera mic ainda
+            // Pequeno delay entre frases para naturalidade
             setTimeout(() => processAudioQueue(), 200);
         } else {
             // FIM DA FILA: LIBERA O MICROFONE
-            AudioMutex.unlock();
-            addLog("✅ Fala concluída.");
+            isSpeaking = false;
+            addLog("✅ Fala concluída. Microfone Ativo.");
             window.isPlayingQueue = false;
+            
+            // Reativa o reconhecimento se necessário (Reset de buffer)
+            if (isMicActive && recognition) {
+                try { recognition.stop(); } catch(e){} 
+                // Ele vai reiniciar sozinho pelo onend
+            }
         }
     };
     

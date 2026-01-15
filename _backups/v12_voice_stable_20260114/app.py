@@ -49,14 +49,14 @@ CAMINHO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 if os.path.exists(CAMINHO_TESSERACT):
     pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT
 
-# Importa o módulo de memória SQLite (LOCAL)
+# Importa o módulo de memória SQLite
 from memoria.db_memoria import (
     get_ou_criar_usuario, atualizar_resumo, atualizar_nome_preferido,
     adicionar_mensagem, get_ultimas_mensagens, contar_mensagens,
     get_mensagens_para_resumir, limpar_mensagens_antigas,
     salvar_fato, get_fatos,
     get_saldo, atualizar_saldo, adicionar_transacao, get_transacoes,
-    limpar_memoria_usuario, salvar_diario_voz
+    limpar_memoria_usuario
 )
 
 # Importa Controlador IoT
@@ -729,11 +729,8 @@ def dividir_texto_para_audio(texto, max_chars=MAX_AUDIO_CHARS):
 
 async def _tts_async(text, path):
     try:
-        # Tenta ler do arquivo, mas define +20% como padrão seguro e agradável
-        with open(CONFIG_FILE, 'r') as f: speed = json.load(f).get('velocidade', '+20%')
-    except: speed = '+20%'
-    
-    # pt-BR-AntonioNeural é a voz masculina padrão de alta qualidade
+        with open(CONFIG_FILE, 'r') as f: speed = json.load(f).get('velocidade', '+0%')
+    except: speed = '+0%'
     comm = edge_tts.Communicate(text, "pt-BR-AntonioNeural", rate=speed)
     await comm.save(path)
 
@@ -1033,124 +1030,33 @@ def api_whatsapp():
         "chat_id": chat_id
     })
 
-# Importa Auditoria
-from sistema.auditoria import registrar_input_usuario, gravar_diario_voz
-
-@socketio.on('background_listen')
-def handle_background_audio(data):
-    """Recebe áudio bruto do ambiente e salva no diário, sem processar IA."""
-    texto = data.get('text', '')
-    if texto and len(texto.strip()) > 0:
-        # Grava em thread separada para não bloquear
-        threading.Thread(target=gravar_diario_voz, args=(texto,), daemon=True).start()
-
 @socketio.on('fala_usuario')
 def handle_web(data):
     user_id = data.get('user_id', 'Patrick')
-    texto = data.get('text', '')
-    sid = request.sid # Captura o ID da sessão atual
-    
-    # 1. Auditoria Imediata (Segurança de Dados)
-    registrar_input_usuario(texto)
-    print(f"[AUDITORIA] Input registrado: {texto[:50]}...", flush=True)
+    res = gerar_resposta_jarvis(user_id, data.get('text'))
+    emit('bot_msg', {'data': res})
 
-    # Função de background com SID injetado
-    def processar_streaming(room_sid):
-        # --- FAST PATHS (Sem Streaming) ---
-        texto_lower = texto.lower()
-        if detectar_pergunta_horario(texto) or \
-           any(k in texto_lower for k in ["ligar tv", "desligar tv", "volume", "mudo"]) or \
-           any(k in texto_lower for k in ["espelhar celular", "limpar memoria"]):
-            
-            res = gerar_resposta_jarvis(user_id, texto)
-            socketio.emit('bot_msg', {'data': res}, room=room_sid)
-            audio = gerar_audio_b64(res)
-            if audio:
-                socketio.emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{audio}"}, room=room_sid)
-            return
+    # Gera múltiplos áudios para respostas longas
+    audios = gerar_multiplos_audios(res)
 
-        # --- SLOW PATH (LLM Streaming) ---
-        print(f"[STREAM] Iniciando para SID: {room_sid}", flush=True)
-        
-        usuario = get_ou_criar_usuario(user_id)
-        buffer_msgs = get_ultimas_mensagens(user_id, BUFFER_SIZE)
-        saldo_atual = get_saldo(user_id)
-        fatos = get_fatos(user_id)
-        
-        fatos_texto = "ESTADO ATUAL E MEMÓRIA DE FATOS:\n" + "\n".join([f"- {f['chave']}: {f['valor']}" for f in fatos]) if fatos else ""
-        nome_usuario = usuario.get('nome_preferido') or "Mestre"
-        agora_br = (datetime.now(timezone.utc) + timedelta(hours=-3)).strftime('%d/%m/%Y %H:%M')
-
-        system_prompt = f"""VOCÊ É O JARVIS, ASSISTENTE OPERACIONAL (GOD MODE).
-DATA: {agora_br}. MESTRE: {nome_usuario}.
-ACESSO: Total (Shell, Arquivos, IoT).
-OBJETIVO: Responda de forma direta e execute comandos.
-CONTEXTO:
-{fatos_texto}
-SALDO: R$ {saldo_atual:.2f}
-"""
-        msgs = [{"role": "system", "content": system_prompt}] + \
-               [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + \
-               [{"role": "user", "content": texto}]
-
-        try:
-            stream = client.chat.completions.create(model=MODELO_ATIVO, messages=msgs, stream=True)
-            
-            frase_buffer = ""
-            texto_completo = ""
-            sentenca_idx = 0
-            delimitadores = tuple(['.', '?', '!', '\n'])
-
-            for chunk in stream:
-                content = chunk.choices[0].delta.content or ""
-                frase_buffer += content
-                texto_completo += content
-                
-                # Emitindo via socketio.emit com room=sid
-                socketio.emit('bot_msg_partial', {'data': content}, room=room_sid)
-
-                if frase_buffer.strip().endswith(delimitadores) and len(frase_buffer) > 10:
-                    sentenca_final = frase_buffer.strip()
-                    audio_b64 = gerar_audio_b64(sentenca_final)
-                    
-                    if audio_b64:
-                        socketio.emit('stream_audio_chunk', {
-                            'audio': audio_b64, 
-                            'index': sentenca_idx,
-                            'text': sentenca_final
-                        }, room=room_sid)
-                        sentenca_idx += 1
-                    
-                    frase_buffer = ""
-
-            if frase_buffer.strip():
-                audio_b64 = gerar_audio_b64(frase_buffer)
-                if audio_b64:
-                    socketio.emit('stream_audio_chunk', {
-                        'audio': audio_b64, 
-                        'index': sentenca_idx,
-                        'text': frase_buffer
-                    }, room=room_sid)
-            
-            socketio.emit('bot_msg_end', {'full_text': texto_completo}, room=room_sid)
-            adicionar_mensagem(user_id, "user", texto)
-            adicionar_mensagem(user_id, "assistant", texto_completo)
-            
-            if "[[" in texto_completo:
-                output_sys = processar_comandos_sistema(texto_completo, user_id)
-                if output_sys:
-                    socketio.emit('bot_msg', {'data': f"\n\n--- SISTEMA ---\n{output_sys}"}, room=room_sid)
-
-            threading.Thread(target=lambda: processar_memoria(user_id), daemon=True).start()
-
-        except Exception as e:
-            print(f"[ERRO STREAM] {e}")
-            socketio.emit('bot_msg', {'data': f"Erro no processamento: {e}"}, room=room_sid)
-
-    # Inicia a thread passando o sid
-    threading.Thread(target=processar_streaming, args=(sid,), daemon=True).start()
+    if audios:
+        if len(audios) == 1:
+            # Resposta curta - envia único áudio
+            emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{audios[0]['audio']}"})
+        else:
+            # Resposta longa - envia múltiplos áudios em sequência
+            emit('audio_parts_start', {'total': len(audios)})
+            for audio_part in audios:
+                emit('play_audio_remoto', {
+                    'url': f"data:audio/mp3;base64,{audio_part['audio']}",
+                    'parte': audio_part['parte'],
+                    'total': audio_part['total']
+                })
+            emit('audio_parts_end', {'total': len(audios)})
 
 # --- Utilitários de Modelo ---
+import requests 
+
 def get_installed_models():
     """Busca a lista real de modelos instalados no Ollama via HTTP Raw"""
     try:
@@ -1167,9 +1073,8 @@ def get_installed_models():
     # Retorna cache rápido se falhar
     return ['qwen2.5-coder:32b', 'gpt-oss:120b-cloud', 'mistral', 'llama3', 'deepseek-r1']
 
-@socketio.on('connect')
-def handle_connect(*args, **kwargs): # Alterado para aceitar qualquer argumento
-    print(f"[SOCKET] Cliente conectado. Detalhes: {args} {kwargs}", flush=True)
+@socketio.on('connect') # Dispara ao conectar
+def handle_connect():
     emit('lista_modelos', {
         'modelos': get_installed_models(), 
         'atual': MODELO_ATIVO

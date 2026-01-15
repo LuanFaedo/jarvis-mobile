@@ -1,0 +1,13 @@
+@echo off
+echo INICIANDO SERVIDOR...
+start /B python app.py > server_log.txt 2>&1
+echo Aguardando 15 segundos...
+timeout /t 15 /nobreak
+echo RODANDO TESTE...
+python test_socket.py > test_result.txt 2>&1
+echo MATANDO SERVIDOR...
+taskkill /F /IM python.exe /T
+type server_log.txt
+echo.
+echo --- RESULTADO DO TESTE ---
+type test_result.txt

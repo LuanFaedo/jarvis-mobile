@@ -24,19 +24,6 @@ const START_TIMESTAMP = Math.floor(Date.now() / 1000);
 
 client.on('message', async msg => {
     try {
-        // [DEFESA CRÍTICA] Validação de Integridade da Mensagem
-        if (!msg) return;
-        
-        // Blinda acesso a propriedades que podem não existir em eventos de sistema
-        // Erro comum: 'markedUnread' undefined
-        try {
-            // Se não tiver ID ou FROM, descarta
-            if (!msg.id || !msg.from) return; 
-        } catch (e) {
-            console.log(chalk.red("[AVISO] Mensagem malformada ignorada."));
-            return;
-        }
-
         // 1. Ignora status e mensagens do próprio bot
         if (msg.from === 'status@broadcast' || msg.fromMe) return;
 

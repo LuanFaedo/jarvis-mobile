@@ -1,0 +1,9 @@
+[MEMÓRIA] Conectado ao Cérebro Externo em: D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP
+[DB] Banco de dados inicializado
+[ERRO IMPORT] Falha ao carregar memória externa: cannot import name 'salvar_diario_voz' from 'memoria.db_memoria' (D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP\memoria\db_memoria.py). Tentando fallback local...
+Traceback (most recent call last):
+  File "C:\WORD\app.py", line 1060, in <module>
+    from sistema.auditoria import registrar_input_usuario, gravar_diario_voz
+  File "C:\WORD\sistema\auditoria.py", line 2, in <module>
+    from memoria.db_memoria import salvar_diario_voz as db_salvar_voz
+ImportError: cannot import name 'salvar_diario_voz' from 'memoria.db_memoria' (D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP\memoria\db_memoria.py)

@@ -26,76 +26,17 @@
 
 
 ## ⚡ CAPACIDADES OPERACIONAIS REAIS
-
-
 - **"Jarvis, faça a gestão das minhas contas":** Ele lê boletos via OCR e atualiza o banco de dados financeiro.
-
-
 - **"Jarvis, faça o espelhamento do meu celular":** Ele inicia o protocolo SCRCPY e organiza a janela na tela.
-
-
 - **"Jarvis, faça uma pesquisa sobre [assunto]":** Ele varre a web e entrega um resumo executivo direto.
-
-
 - **"Jarvis, faça o controle da TV":** Ele interage via IoT para ligar/ajustar a televisão.
-
-
-- **"Jarvis, fale comigo pelo celular":** Agora possui cliente Android nativo para comunicação via SocketIO.
-
-
-
-
 
 ---
 
-
-
-
-
-## 🏗️ ARQUITETURA DE SUPORTE (V12.3)
-
-
-- **Cérebro:** Flask (app.py) operando como o núcleo de processamento em modo Streaming.
-
-
+## 🏗️ ARQUITETURA DE SUPORTE (V12)
+- **Cérebro:** Flask (app.py) operando como o núcleo de processamento.
 - **Braços:** `ManipuladorTotal` (arquivos) e `AutomacaoPC` (interface).
-
-
-- **Voz/Ouvido:** Interface Web com suporte a **Barge-In** (interrupção) e App Android (KivyMD).
-
-
-- **Banco de Dados:** SQLite local (`jarvis_memoria.db`) com diário de voz integral e filtro de coerência.
-
-
-
-
+- **Voz/Ouvido:** Integração total via WhatsApp e Interface Desktop para comandos rápidos.
 
 ## 📅 Histórico de Comandos do Criador
-
-
-- **14/01/2026:** Implementada a filosofia de "Jarvis, faça algo".
-
-
-- **14/01/2026:** [GEMINI] **Upgrade para V12.3 - Real-Time Streaming & Barge-In**:
-
-
-  - Implementado **Streaming de Áudio**: O Jarvis começa a falar assim que a primeira sentença é gerada.
-
-
-  - Implementado **Barge-In (Interrupção)**: O sistema detecta a Wake Word mesmo enquanto está falando e cala a boca imediatamente para ouvir o novo comando.
-
-
-  - Criado **Diário de Voz em SQLite**: Gravação integral de todo áudio captado (após filtro de coerência) na tabela `diario_voz`.
-
-
-  - **Ajuste de Voz Masculina**: Configurado ID 'AntonioNeural' com velocidade +20% para tom natural.
-
-
-  - **Remoção de Dependências Externas**: O sistema agora é 100% autônomo, rodando inteiramente em `C:\WORD`.
-
-
-  - **Correção Crítica WhatsApp**: Atualizada biblioteca para compatibilidade com a nova versão do WhatsApp Web.
-
-
-  - **Lançamento Jarvis Mobile**: Criado projeto inicial em KivyMD (`/mobile`) para controle nativo via Android.
-
+- **14/01/2026:** Implementada a filosofia de "Jarvis, faça algo". O sistema agora entende que sua função primordial é a execução de tarefas sistêmicas sob demanda do Criador Patrick.

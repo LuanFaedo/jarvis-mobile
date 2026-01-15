@@ -49,14 +49,14 @@ CAMINHO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 if os.path.exists(CAMINHO_TESSERACT):
     pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT
 
-# Importa o módulo de memória SQLite (LOCAL)
+# Importa o módulo de memória SQLite
 from memoria.db_memoria import (
     get_ou_criar_usuario, atualizar_resumo, atualizar_nome_preferido,
     adicionar_mensagem, get_ultimas_mensagens, contar_mensagens,
     get_mensagens_para_resumir, limpar_mensagens_antigas,
     salvar_fato, get_fatos,
     get_saldo, atualizar_saldo, adicionar_transacao, get_transacoes,
-    limpar_memoria_usuario, salvar_diario_voz
+    limpar_memoria_usuario
 )
 
 # Importa Controlador IoT
