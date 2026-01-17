@@ -1,0 +1,47 @@
+name: jarvis_flutter
+description: Interface Mobile do J.A.R.V.I.S. (Flutter) - Always Listening
+publish_to: 'none'
+version: 2.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Socket.IO para comunicação com servidor
+  socket_io_client: ^2.0.3+1
+
+  # Reprodução de áudio (respostas do Jarvis)
+  audioplayers: ^5.2.1
+
+  # Armazenamento local
+  path_provider: ^2.1.1
+
+  # Permissões
+  permission_handler: ^11.1.0
+
+  # Fontes
+  google_fonts: ^6.1.0
+
+  # Animações
+  animate_do: ^3.3.4
+
+  # Speech-to-Text (Wake Word Detection)
+  speech_to_text: ^7.0.0
+
+  # QR Code Scanner para Quick Connect
+  mobile_scanner: ^5.1.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Assets para sons de feedback
+  assets:
+    - assets/sounds/

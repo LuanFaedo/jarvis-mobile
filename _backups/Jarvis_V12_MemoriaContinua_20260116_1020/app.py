@@ -28,18 +28,11 @@ from email.utils import parsedate_to_datetime
 from PIL import Image, ImageGrab, ImageOps, ImageEnhance
 import mimetypes
 import pytesseract
-import hashlib
 
-# GLOBAIS
 try:
     import qrcode
 except ImportError:
     qrcode = None
-
-LAST_USER_INPUT = {"text": "", "time": 0}
-LAST_PROCESSED_TEXT = ""
-LAST_PROCESSED_TIME = 0
-LAST_RESPONSE_HASH = {"text": "", "time": 0}
 
 # --- Configurações Iniciais ---
 if getattr(sys, 'frozen', False):
@@ -200,7 +193,8 @@ def carregar_base_conhecimento():
                 data = json.load(f)
                 if isinstance(data, list):
                     return "\n".join([str(i.get('content', ''))[:200] for i in data[:20]])
-        except: pass
+        except:
+            pass
     return "Base de conhecimento local não encontrada."
 
 def extrair_fatos_da_mensagem(user_id: str, texto: str):
@@ -218,7 +212,8 @@ Texto: "{texto}"\nRetorne APENAS um JSON puro lista de objetos: [{{"tipo": "..."
                     chave = fato['chave'].lower().replace(" ", "_")
                     salvar_fato(user_id, fato.get('tipo', 'geral'), chave, str(fato['valor']))
                     if chave in ['nome', 'nome_preferido', 'apelido']: atualizar_nome_preferido(user_id, str(fato['valor']))
-    except: pass
+    except:
+        pass
 
 def processar_memoria(user_id: str):
     total_msgs = contar_mensagens(user_id)
@@ -298,7 +293,7 @@ def processar_comandos_sistema(resposta_llm, user_id, profundidade=0):
     for cmd in cmds:
         cmd_lower = cmd.lower()
         if any(p in cmd_lower for p in COMANDOS_PROIBIDOS):
-            if not ("format" in cmd_lower and not any(x in cmd_lower for x in ["c:", "d:", "/fs:"])):
+            if not ("format" in cmd_lower and not any(x in cmd_lower for x in ["c:", "d:", "/fs:"])): 
                 output_extra += f"\n> **BLOQUEADO (SEGURANÇA):** `{cmd}`\n"; continue
 
         print(f"[ACAO] Executando: {cmd}...", flush=True)
@@ -372,19 +367,23 @@ def gerar_resposta_jarvis(user_id, texto):
     agora_br = (datetime.now(timezone.utc) + OFFSET_TEMPORAL).astimezone(timezone(timedelta(hours=-3)))   
     total_chats_ativos = len([c for c in chats_ativos.values() if c.get("processando", False)])
 
-    system_prompt = f"""VOCÊ É J.A.R.V.I.S., UMA IA ASSISTENTE LEAL, ESPIRITUOSA E EFICIENTE.
+    system_prompt = f"""VOCÊ É O JARVIS, UM ASSISTENTE FINANCEIRO AVANÇADO E CONTROLADOR DE SISTEMA COM ACESSO TOTAL (GOD MODE).
 DATA: {agora_br.strftime('%d/%m/%Y %H:%M')}. USUÁRIO MESTRE: {nome_usuario}.
 
-=== SUA PERSONALIDADE ===
-1. Você não é um robô chato. Você é o Jarvis. Tenha personalidade.
-2. Use o contexto passivo (o que foi ouvido antes) para surpreender o usuário.
-3. Se o usuário perguntar "o que eu disse?", responda com precisão usando o histórico.
-4. Respostas curtas e diretas são melhores para chat por voz.
+=== DIRETRIZES ===
+1. ASSISTENTE FINANCEIRO: Gerencie o saldo de {nome_usuario}. Confirme gastos/ganhos.
+2. ACESSO TOTAL: Manipule arquivos, pastas, processos.
+3. SEJA DIRETO: Não peça permissão.
+4. RESPOSTA CURTA: No WhatsApp, seja breve.
+
+=== PROCESSAMENTO MULTI-CHAT ===
+5. Chats simultâneos ativos: {total_chats_ativos}. Não espere.
 
 === COMANDOS ===
 - [[SEARCH: query]] -> Busca na internet.
-- [[AUTO: comando | arg]] -> Automação PC.
+- [[AUTO: comando | arg]] -> Interface (abrir_programa, digitar, clicar, minimizar_tudo).     
 - [[CMD: comando]] -> Terminal.
+- [[READ: path]] / [[WRITE: path | content]] -> Arquivos.
 
 CONTEXTO:
 {usuario['resumo_conversa']}
@@ -395,13 +394,14 @@ CONTEXTO:
 """
 
     msgs = [{"role": "system", "content": system_prompt}] + [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + [{"role": "user", "content": texto}]
+
     texto_lower = texto.lower()
 
     descricao_visual = ""
     imagem_b64 = None
     modo_leitura_texto = any(k in texto_lower for k in ["ler texto", "leia o texto", "extrair texto", "copiar texto", "o que está escrito"])
 
-    if any(k in texto_lower for k in ["veja minha tela", "olhe minha tela", "o que está na tela", "leia a tela", "analise a tela"]) or (modo_leitura_texto and "tela" in texto_lower):
+    if any(k in texto_lower for k in ["veja minha tela", "olhe minha tela", "o que está na tela", "leia a tela", "analise a tela"]) or modo_leitura_texto and "tela" in texto_lower:
         print(f"[VISAO] Capturando tela (Modo Texto: {modo_leitura_texto})...", flush=True)
         if modo_leitura_texto:
             screenshot = ImageGrab.grab()
@@ -436,7 +436,8 @@ CONTEXTO:
             msg_voz = f"{h} {lbl_h}"
             if m > 0: msg_voz += f" e {m} {lbl_m}"
             resposta_horario = f"Agora são {msg_voz} em {info['local']}."
-        except: resposta_horario = f"Agora são {info['completo']}."
+        except:
+            resposta_horario = f"Agora são {info['completo']}."
 
         if "brasil" in texto_lower and "portugal" in texto_lower:
             br = obter_horario_mundial("brasil")
@@ -484,13 +485,15 @@ CONTEXTO:
             try:
                 if "[ANEXO IMAGEM" not in texto: extrair_fatos_da_mensagem(user_id, texto)
                 processar_memoria(user_id)
-            except: pass
+            except:
+                pass
         threading.Thread(target=bg_task, daemon=True).start()
 
-        res_txt = re.sub(r'\n[CONTEXTO_BUSCA_INTERNO]:.*?(?=\n|$)', '', res_txt, flags=re.DOTALL)
+        res_txt = re.sub(r'\[CONTEXTO_BUSCA_INTERNO\]:.*?(?=\n|$)', '', res_txt, flags=re.DOTALL)
         res_txt = res_txt.replace("--- SISTEMA ---", "").strip()
         return res_txt
-    except Exception as e: return f"Erro: {e}"
+    except Exception as e:
+        return f"Erro: {e}"
 
 def dividir_texto_para_audio(texto, max_chars=MAX_AUDIO_CHARS):
     if len(texto) <= max_chars: return [texto]
@@ -512,7 +515,8 @@ def dividir_texto_para_audio(texto, max_chars=MAX_AUDIO_CHARS):
 async def _tts_async(text, path):
     try:
         with open(CONFIG_FILE, 'r') as f: speed = json.load(f).get('velocidade', '+0%')
-    except: speed = '+0%'
+    except:
+        speed = '+0%'
     comm = edge_tts.Communicate(text, "pt-BR-AntonioNeural", rate=speed)
     await comm.save(path)
 
@@ -540,8 +544,9 @@ def gerar_audio_b64(text):
             with open(path, "rb") as f: b64 = base64.b64encode(f.read()).decode('utf-8')
             os.remove(path)
             return b64
-        else: return None
-    except Exception as e: 
+        else:
+            return None
+    except Exception as e:
         print(f"[ERRO CRÍTICO AUDIO]: {e}", flush=True)
         return None
 
@@ -557,7 +562,7 @@ def gerar_multiplos_audios(text):
 
     if not text_limpo or len(text_limpo) < 2: return []
     segmentos = dividir_texto_para_audio(text_limpo)
-    if len(segmentos) > 1: print(f"[AUDIO] Texto longo. {len(segmentos)} partes...", flush=True)      
+    if len(segmentos) > 1: print(f"[AUDIO] Texto longo. {len(segmentos)} partes...", flush=True)
     audios = []
     for i, segmento in enumerate(segmentos):
         audio_b64 = gerar_audio_b64(segmento)
@@ -571,7 +576,8 @@ def transcrever_audio(base64_data):
     if ffmpeg_path: AudioSegment.converter = ffmpeg_path
     try:
         audio_bytes = base64.b64decode(base64_data)
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t: t.write(audio_bytes); p = t.name
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t:
+            t.write(audio_bytes); p = t.name
         wav = p + ".wav"
         try: AudioSegment.from_file(p).export(wav, format="wav")
         except: return "[ERRO AUDIO FORMATO]"
@@ -580,7 +586,8 @@ def transcrever_audio(base64_data):
         if os.path.exists(p): os.remove(p)
         if os.path.exists(wav): os.remove(wav)
         return texto
-    except: return None
+    except:
+        return None
 
 def analisar_imagem(base64_data):
     try:
@@ -594,13 +601,15 @@ def capturar_tela_base64():
         buffered = io.BytesIO()
         screenshot.save(buffered, format="JPEG", quality=70)
         return base64.b64encode(buffered.getvalue()).decode('utf-8')
-    except: return None
+    except:
+        return None
 
 def ler_imagem_local_base64(caminho):
     try:
         with open(caminho.strip(), "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
-    except: return None
+    except:
+        return None
 
 def otimizar_imagem_para_ocr(img):
     img = ImageOps.grayscale(img)
@@ -634,8 +643,10 @@ def api_whatsapp():
     chat_id = data.get('chat_id', sender) 
 
     with lock_chats:
-        if chat_id not in chats_ativos: chats_ativos[chat_id] = {"processando": True, "fila": [], "resultados": []}
-        else: chats_ativos[chat_id]["processando"] = True
+        if chat_id not in chats_ativos:
+            chats_ativos[chat_id] = {"processando": True, "fila": [], "resultados": []}
+        else:
+            chats_ativos[chat_id]["processando"] = True
 
     if data.get('audio_data'):
         trans = transcrever_audio(data['audio_data'])
@@ -652,7 +663,8 @@ def api_whatsapp():
             else:
                 desc_visual = analisar_imagem(data['image_data'])
                 texto += f"\n[ANEXO IMAGEM - VISÃO]: {desc_visual}"
-        except: pass
+        except:
+            pass
 
     res = gerar_resposta_jarvis(sender, texto)
     audios = gerar_multiplos_audios(res)
@@ -677,81 +689,35 @@ STOPWORDS_PASSIVAS = [
 
 @socketio.on('passive_log')
 def handle_passive_log(data):
-    global LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
     user_id = data.get('user_id', 'Mestre')
     texto = data.get('text', '').strip()
     if not texto or len(texto) < 5: return
-    
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
-    current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM PASSIVO] Bloqueado: '{texto}'")
-        return
-    LAST_PROCESSED_TEXT = texto
-    LAST_PROCESSED_TIME = current_time
-    
     texto_lower = texto.lower()
     if any(sw in texto_lower for sw in STOPWORDS_PASSIVAS): return
     print(f"[PASSIVE] Memorizando contexto: '{texto}'")
-    
-    threading.Thread(target=adicionar_mensagem, args=(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")).start()
+    adicionar_mensagem(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")
 
 @socketio.on('active_command')
 @socketio.on('jarvis_command')
 def handle_active_command(data):
-    socketio.start_background_task(process_active_command_bg, data)
-
-def process_active_command_bg(data):
-    global LAST_RESPONSE_HASH, LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
-    
     user_id = data.get('user_id', 'Mestre')
-    texto = data.get('text', '').strip()
-    
-    if not texto or len(texto) < 2: return
-
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
-    current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM ATIVO] Bloqueado: '{texto}'")
-        return
-    LAST_PROCESSED_TEXT = texto
-    LAST_PROCESSED_TIME = current_time
-    # ------------------------------------
-
-    print(f"[ACTIVE] Comando recebido: '{texto}'", flush=True)
-
-    triggers = ["jarvis", "javis", "chaves", "garvis", "assistente", "já vi", "jair"]
-    texto_lower = texto.lower()
-    
-    if texto_lower in triggers:
-        print("[FAST] Apenas gatilho detectado. Respondendo 'Pois não?'.")
-        resposta = "Pois não?"
-        audio_b64 = gerar_audio_b64(resposta)
-        socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': True})
-        return
-
+    texto = data.get('text', '')
+    if not texto or len(texto.strip()) < 2: return
+    print(f"[ACTIVE] Comando direto: '{texto}'", flush=True)
     resposta = gerar_resposta_jarvis(user_id, texto)
-    
-    resp_hash = hashlib.md5(resposta.encode('utf-8')).hexdigest()
-    if resp_hash == LAST_RESPONSE_HASH["text"] and (current_time - LAST_RESPONSE_HASH["time"]) < 1.0:
-        print("[DUPLICIDADE] Bloqueando TTS repetido.")
-        return
-    LAST_RESPONSE_HASH = {"text": resp_hash, "time": current_time}
-    
     audio_b64 = gerar_audio_b64(resposta)
     termos_fim = ['tchau', 'até logo', 'obrigado jarvis', 'encerrar', 'dormir']
     continuar = not any(t in resposta.lower() for t in termos_fim)
-    
-    socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
-    
+    emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
     try:
         audios = gerar_multiplos_audios(resposta)
         if audios and len(audios) > 1:
-            socketio.emit('audio_parts_start', {'total': len(audios)})
+            emit('audio_parts_start', {'total': len(audios)})
             for part in audios:
-                socketio.emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{part['audio']}", 'parte': part['parte'], 'total': part['total']})
-            socketio.emit('audio_parts_end', {'total': len(audios)})
-    except: pass
+                emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{part['audio']}", 'parte': part['parte'], 'total': part['total']})
+            emit('audio_parts_end', {'total': len(audios)})
+    except:
+        pass
 
 @socketio.on('message_text')
 def handle_legacy_message_text(data):
@@ -765,7 +731,8 @@ def get_installed_models():
         resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=0.5)
         if resp.status_code == 200:
             return [m.get('name', '?') for m in resp.json().get('models', [])]
-    except: pass
+    except:
+        pass
     return ['qwen2.5-coder:32b', 'gpt-oss:120b-cloud', 'mistral', 'llama3', 'deepseek-r1']
 
 @socketio.on('connect') 

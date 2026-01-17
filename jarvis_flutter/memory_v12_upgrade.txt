@@ -1,0 +1,15 @@
+
+## 🚀 Upgrade de Fluidez e Interação (Alexa-like) (16/01/2026)
+
+### 1. Eliminação de Interrupção Precoce (VAD Manual)
+- **Problema Solucionado:** O sistema cortava o comando ao ouvir apenas o nome "Jarvis".
+- **Solução:** Implementado um Timer de Silêncio de 2 segundos no Flutter. O App agora ouve a frase INTEIRA (ex: "Jarvis, acenda a luz") e envia o bloco completo após o silêncio, sem interrupções intermediárias.
+- **Configuração:** listenFor: 30s e pauseFor: 2s.
+
+### 2. Modo Barge-in (Interrupção Ativa)
+- **Funcionalidade:** Agora você pode interromper o Jarvis enquanto ele fala. Se disser "Jarvis" durante uma resposta, o áudio para imediatamente e o microfone prioriza seu novo comando.
+
+### 3. Estabilidade do Backend (Anti-Crash)
+- **Correção AssertionError:** O processamento pesado foi movido para socketio.start_background_task. Isso evita conflitos de escrita simultânea no socket.
+- **Filtro de Gatilho Puro:** Se o sistema receber apenas o nome (sem comando), responde rapidamente com "Pois não?" ou "Sim?" via Fast Path, sem onerar o LLM.
+- **Debounce:** Reforçado o filtro de duplicidade para ignorar comandos repetidos em menos de 2s.

@@ -1,0 +1,35 @@
+BACKUP JARVIS V12.4 - Streaming TTS em Tempo Real
+=================================================
+Data: 15/01/2026 17:38
+Criado por: Claude Code (Opus 4.5)
+
+CONTEUDO DO BACKUP:
+-------------------
+- app.py (73KB) - Backend Flask com streaming TTS V2
+- memory.md - Documentacao do projeto
+- sistema/ - Modulos core, automacao, web_search
+- memoria/ - Banco SQLite + configs JSON
+- iot/ - Controlador Samsung TV
+- templates/ - Interface web HTML
+- jarvis_flutter_lib/ - Codigo Dart do app Flutter
+- pubspec.yaml - Dependencias Flutter
+
+FUNCIONALIDADES DESTA VERSAO:
+-----------------------------
+1. Streaming TTS em tempo real (edge-tts nativo)
+2. Endpoints Socket.IO v2 (fala_usuario_v2, audio_stream_v2)
+3. Generator de sentencas do LLM
+4. Flutter app funcional (build OK)
+5. Kotlin 2.1.0
+
+PARA RESTAURAR:
+---------------
+1. Copie os arquivos de volta para jarvis-mobile/
+2. Para Flutter: copie jarvis_flutter_lib/* para jarvis_flutter/lib/
+
+NOTA: Este backup NAO inclui:
+- node_modules
+- .buildozer
+- build/
+- .gradle
+- Banco de dados (jarvis_memoria.db pode ter dados sensiveis)

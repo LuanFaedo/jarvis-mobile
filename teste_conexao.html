@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS - Teste de Conexao</title>
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
+            color: #00ffff;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 800px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 30px; text-shadow: 0 0 20px #00ffff; }
+
+        .card {
+            background: rgba(0, 255, 255, 0.05);
+            border: 1px solid rgba(0, 255, 255, 0.3);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 { margin-bottom: 15px; font-size: 18px; }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 10px;
+            animation: pulse 1.5s infinite;
+        }
+        .status-connected { background: #00ff00; box-shadow: 0 0 10px #00ff00; }
+        .status-disconnected { background: #ff0000; box-shadow: 0 0 10px #ff0000; }
+        .status-connecting { background: #ffff00; box-shadow: 0 0 10px #ffff00; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        input, button {
+            padding: 12px 20px;
+            border: 1px solid #00ffff;
+            border-radius: 5px;
+            background: rgba(0, 255, 255, 0.1);
+            color: #00ffff;
+            font-size: 14px;
+            outline: none;
+        }
+        input { width: 100%; margin-bottom: 10px; }
+        input:focus { box-shadow: 0 0 10px rgba(0, 255, 255, 0.5); }
+
+        button {
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
+            margin-bottom: 10px;
+        }
+        button:hover { background: rgba(0, 255, 255, 0.3); transform: scale(1.02); }
+        button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .btn-primary { background: rgba(0, 255, 255, 0.2); }
+        .btn-danger { border-color: #ff6b6b; color: #ff6b6b; }
+        .btn-success { border-color: #00ff00; color: #00ff00; }
+
+        .log-area {
+            background: #000;
+            border: 1px solid #333;
+            border-radius: 5px;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+        .log-entry { margin-bottom: 5px; padding: 5px; border-radius: 3px; }
+        .log-info { color: #00ffff; }
+        .log-success { color: #00ff00; background: rgba(0, 255, 0, 0.1); }
+        .log-error { color: #ff6b6b; background: rgba(255, 0, 0, 0.1); }
+        .log-warning { color: #ffff00; }
+        .log-response { color: #ff00ff; background: rgba(255, 0, 255, 0.1); }
+
+        .ip-info {
+            background: rgba(255, 255, 0, 0.1);
+            border: 1px solid #ffff00;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .ip-info code {
+            background: #000;
+            padding: 2px 8px;
+            border-radius: 3px;
+            color: #00ff00;
+        }
+
+        .flex-row { display: flex; gap: 10px; flex-wrap: wrap; }
+        .flex-row input { flex: 1; min-width: 200px; }
+
+        audio { width: 100%; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>J.A.R.V.I.S. - Teste de Conexao</h1>
+
+        <div class="ip-info">
+            <strong>Seu IP Local (para o celular):</strong><br>
+            Execute no terminal: <code>ipconfig</code><br>
+            Use o IPv4 da sua rede Wi-Fi (ex: <code>192.168.1.xxx</code>)
+        </div>
+
+        <div class="card">
+            <h2>1. Configuracao do Servidor</h2>
+            <div class="flex-row">
+                <input type="text" id="serverUrl" value="http://localhost:5000" placeholder="URL do servidor">
+                <button onclick="conectar()" class="btn-primary" id="btnConectar">Conectar</button>
+                <button onclick="desconectar()" class="btn-danger" id="btnDesconectar" disabled>Desconectar</button>
+            </div>
+            <p style="margin-top: 10px;">
+                Status: <span class="status-indicator status-disconnected" id="statusIndicator"></span>
+                <span id="statusText">Desconectado</span>
+            </p>
+        </div>
+
+        <div class="card">
+            <h2>2. Teste de Comunicacao</h2>
+            <div class="flex-row">
+                <input type="text" id="mensagem" placeholder="Digite uma mensagem para o Jarvis..." onkeypress="if(event.key==='Enter')enviarMensagem()">
+                <button onclick="enviarMensagem()" class="btn-success" id="btnEnviar" disabled>Enviar</button>
+            </div>
+            <div style="margin-top: 15px;">
+                <button onclick="enviarTesteRapido('Ola Jarvis')" disabled class="teste-btn">Teste: "Ola"</button>
+                <button onclick="enviarTesteRapido('Que horas sao?')" disabled class="teste-btn">Teste: "Horas"</button>
+                <button onclick="enviarTesteRapido('Como voce esta?')" disabled class="teste-btn">Teste: "Status"</button>
+            </div>
+            <audio id="audioPlayer" controls style="display:none;"></audio>
+        </div>
+
+        <div class="card">
+            <h2>3. Log de Eventos</h2>
+            <button onclick="limparLog()" style="margin-bottom: 10px;">Limpar Log</button>
+            <div class="log-area" id="logArea"></div>
+        </div>
+
+        <div class="card">
+            <h2>4. Verificacoes de Rede</h2>
+            <button onclick="verificarFirewall()">Verificar Firewall (cmd)</button>
+            <button onclick="mostrarIP()">Mostrar meu IP</button>
+            <button onclick="testarHTTP()">Testar HTTP Direto</button>
+        </div>
+    </div>
+
+    <script>
+        let socket = null;
+
+        function log(msg, tipo = 'info') {
+            const logArea = document.getElementById('logArea');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = `log-entry log-${tipo}`;
+            entry.innerHTML = `[${time}] ${msg}`;
+            logArea.appendChild(entry);
+            logArea.scrollTop = logArea.scrollHeight;
+        }
+
+        function limparLog() {
+            document.getElementById('logArea').innerHTML = '';
+            log('Log limpo', 'info');
+        }
+
+        function atualizarStatus(status) {
+            const indicator = document.getElementById('statusIndicator');
+            const text = document.getElementById('statusText');
+            const btnConectar = document.getElementById('btnConectar');
+            const btnDesconectar = document.getElementById('btnDesconectar');
+            const btnEnviar = document.getElementById('btnEnviar');
+            const testeBtns = document.querySelectorAll('.teste-btn');
+
+            indicator.className = 'status-indicator';
+
+            if (status === 'connected') {
+                indicator.classList.add('status-connected');
+                text.textContent = 'Conectado';
+                btnConectar.disabled = true;
+                btnDesconectar.disabled = false;
+                btnEnviar.disabled = false;
+                testeBtns.forEach(b => b.disabled = false);
+            } else if (status === 'connecting') {
+                indicator.classList.add('status-connecting');
+                text.textContent = 'Conectando...';
+                btnConectar.disabled = true;
+                btnDesconectar.disabled = true;
+                btnEnviar.disabled = true;
+            } else {
+                indicator.classList.add('status-disconnected');
+                text.textContent = 'Desconectado';
+                btnConectar.disabled = false;
+                btnDesconectar.disabled = true;
+                btnEnviar.disabled = true;
+                testeBtns.forEach(b => b.disabled = true);
+            }
+        }
+
+        function conectar() {
+            const url = document.getElementById('serverUrl').value;
+            log(`Tentando conectar em: ${url}`, 'warning');
+            atualizarStatus('connecting');
+
+            try {
+                socket = io(url, {
+                    transports: ['websocket', 'polling'],
+                    reconnection: true,
+                    reconnectionAttempts: 3,
+                    timeout: 10000
+                });
+
+                socket.on('connect', () => {
+                    log(`CONECTADO! Socket ID: ${socket.id}`, 'success');
+                    atualizarStatus('connected');
+                });
+
+                socket.on('disconnect', (reason) => {
+                    log(`Desconectado: ${reason}`, 'error');
+                    atualizarStatus('disconnected');
+                });
+
+                socket.on('connect_error', (err) => {
+                    log(`ERRO DE CONEXAO: ${err.message}`, 'error');
+                    log('Verifique: 1) Servidor rodando? 2) IP correto? 3) Firewall?', 'warning');
+                    atualizarStatus('disconnected');
+                });
+
+                // Eventos do Jarvis
+                socket.on('bot_response', (data) => {
+                    log(`RESPOSTA DO JARVIS:`, 'response');
+                    log(`Texto: ${data.text}`, 'response');
+                    log(`Continuar conversa: ${data.continue_conversation}`, 'info');
+
+                    if (data.audio) {
+                        log('Audio recebido! Reproduzindo...', 'success');
+                        const audioPlayer = document.getElementById('audioPlayer');
+                        audioPlayer.src = `data:audio/mp3;base64,${data.audio}`;
+                        audioPlayer.style.display = 'block';
+                        audioPlayer.play();
+                    }
+                });
+
+                socket.on('status', (data) => {
+                    log(`Status: ${data.msg}`, 'info');
+                });
+
+                socket.on('bot_msg', (data) => {
+                    log(`bot_msg: ${data.data}`, 'response');
+                });
+
+                socket.on('lista_modelos', (data) => {
+                    log(`Modelos disponiveis: ${data.modelos.join(', ')}`, 'info');
+                    log(`Modelo atual: ${data.atual}`, 'info');
+                });
+
+            } catch (e) {
+                log(`Erro ao criar socket: ${e.message}`, 'error');
+                atualizarStatus('disconnected');
+            }
+        }
+
+        function desconectar() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                log('Desconectado manualmente', 'warning');
+            }
+            atualizarStatus('disconnected');
+        }
+
+        function enviarMensagem() {
+            const msg = document.getElementById('mensagem').value.trim();
+            if (!msg) return;
+            if (!socket || !socket.connected) {
+                log('Nao conectado!', 'error');
+                return;
+            }
+
+            log(`Enviando (jarvis_command): "${msg}"`, 'info');
+
+            // Envia no formato que o Flutter usa
+            socket.emit('jarvis_command', {
+                user_id: 'Teste_HTML',
+                text: msg,
+                trigger_type: 'html_test',
+                timestamp: new Date().toISOString()
+            });
+
+            // Tambem envia no formato legado
+            socket.emit('message_text', { data: msg });
+
+            document.getElementById('mensagem').value = '';
+        }
+
+        function enviarTesteRapido(msg) {
+            document.getElementById('mensagem').value = msg;
+            enviarMensagem();
+        }
+
+        function verificarFirewall() {
+            log('Execute no PowerShell (Admin):', 'warning');
+            log('netsh advfirewall firewall add rule name="Jarvis5000" dir=in action=allow protocol=TCP localport=5000', 'info');
+            log('Ou desative temporariamente o firewall para teste', 'info');
+        }
+
+        function mostrarIP() {
+            log('Execute no terminal: ipconfig', 'info');
+            log('Procure por "IPv4 Address" na sua conexao Wi-Fi', 'info');
+            log('Use esse IP no app Flutter (ex: http://192.168.1.100:5000)', 'warning');
+        }
+
+        async function testarHTTP() {
+            const url = document.getElementById('serverUrl').value;
+            log(`Testando HTTP GET em: ${url}`, 'info');
+
+            try {
+                const response = await fetch(url, {
+                    method: 'GET',
+                    mode: 'cors'
+                });
+                log(`HTTP OK! Status: ${response.status}`, 'success');
+            } catch (e) {
+                log(`HTTP FALHOU: ${e.message}`, 'error');
+                log('Isso pode indicar: servidor offline, CORS, ou firewall', 'warning');
+            }
+        }
+
+        // Inicializa
+        log('Pagina de teste carregada', 'success');
+        log('1. Inicie o servidor (python app.py)', 'info');
+        log('2. Clique em "Conectar"', 'info');
+        log('3. Envie uma mensagem de teste', 'info');
+    </script>
+</body>
+</html>

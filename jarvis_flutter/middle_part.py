@@ -1,211 +1,8 @@
-from flask import Flask, render_template, send_from_directory, request, jsonify, session, redirect, url_for, flash
-from flask_cors import CORS
-from flask_socketio import SocketIO, emit
-from pycloudflared import try_cloudflare
-from dotenv import load_dotenv
-from openai import OpenAI
-import edge_tts
-import ollama
-import asyncio
-import os
-import time
-import threading
-import sys
-import json
-import uuid
-import re
-import subprocess
-import shutil
-import speech_recognition as sr
-from pydub import AudioSegment
-import io
-import base64
-import tempfile
-from datetime import datetime, timedelta, timezone
-from functools import wraps
-import urllib.request
-from email.utils import parsedate_to_datetime
-from PIL import Image, ImageGrab, ImageOps, ImageEnhance
-import mimetypes
-import pytesseract
-import hashlib
 
-# GLOBAIS
-try:
-    import qrcode
-except ImportError:
-    qrcode = None
-
-LAST_USER_INPUT = {"text": "", "time": 0}
-LAST_PROCESSED_TEXT = ""
-LAST_PROCESSED_TIME = 0
-LAST_RESPONSE_HASH = {"text": "", "time": 0}
-
-# --- Configurações Iniciais ---
-if getattr(sys, 'frozen', False):
-    BASE_DIR = os.path.dirname(sys.executable)
-else:
-    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-os.environ['OMP_THREAD_LIMIT'] = '1'
-os.environ['TESSDATA_PREFIX'] = os.path.join(BASE_DIR, "tessdata")
-
-CAMINHO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-if os.path.exists(CAMINHO_TESSERACT):
-    pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT
-
-# Importa o módulo de memória SQLite
-from memoria.db_memoria import (
-    get_ou_criar_usuario,
-    atualizar_resumo,
-    atualizar_nome_preferido,
-    adicionar_mensagem,
-    get_ultimas_mensagens,
-    contar_mensagens,
-    get_mensagens_para_resumir,
-    limpar_mensagens_antigas,
-    salvar_fato,
-    get_fatos,
-    get_saldo,
-    atualizar_saldo,
-    adicionar_transacao,
-    get_transacoes,
-    limpar_memoria_usuario
-)
-
-from iot.tv_controller import TVController
-from sistema.automacao import pc
-from sistema.web_search import pesquisar_web
-from sistema.core import ManipuladorTotal
-
-manipulador = ManipuladorTotal(BASE_DIR)
-
-import requests
-
-API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:11434/v1")
-API_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJ9KfyhZeNo5E84kORaqKYu7gxopcvqT2hRabwJU/sXF"
-MODELO_ATIVO = "gpt-oss:120b-cloud"
-
-client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
-client_ollama = ollama.Client(host=API_BASE_URL.replace("/v1", ""))
-
-def consultar_gemini_nuvem(prompt):
-    print(f"[SUPERVISOR] Consultando: {prompt[:50]}...", flush=True)
-    try:
-        payload = {
-            "model": MODELO_ATIVO,
-            "prompt": f"SYSTEM: Arquiteto Sênior. Gere apenas o código.\nPEDIDO: {prompt}",
-            "stream": False
-        }
-        endpoint = API_BASE_URL.replace("/v1", "") + "/api/generate"
-        resp = requests.post(endpoint, json=payload, timeout=60)
-        if resp.status_code == 200:
-            return resp.json().get('response', '')
-    except Exception as e:
-        print(f"[ERRO SUPERVISOR] {e}")
-    return "Erro ao consultar supervisor."
-
-AUDIO_DIR = os.path.join(BASE_DIR, "audios")
-HISTORY_DIR = os.path.join(BASE_DIR, "historico")
-KNOWLEDGE_FILE = os.path.join(BASE_DIR, "memoria/conhecimento.json")
-CONFIG_FILE = os.path.join(BASE_DIR, "memoria/config_jarvis.json")
-
-RESUMO_INTERVAL = 20
-BUFFER_SIZE = 10
-OFFSET_TEMPORAL = timedelta(hours=0)
-MAX_CHAR_INPUT = 5000
-MAX_AUDIO_CHARS = 1500
-
-chats_ativos = {}
-lock_chats = threading.Lock()
-
-for folder in [AUDIO_DIR, HISTORY_DIR]:
-    if not os.path.exists(folder): os.makedirs(folder)
-
-app = Flask(__name__,
-            template_folder=os.path.join(BASE_DIR, "templates"),
-            static_folder=os.path.join(BASE_DIR, "static"),
-            static_url_path='/static')
-app.secret_key = 'jarvis_v11_ultra'
-CORS(app, resources={r"/*": {"origins": "*"}})
-socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
-
-def obter_horario_mundial(local="brasil"):
-    fusos = {
-        "brasil": ("America/Sao_Paulo", -3, "Brasília"),
-        "brasilia": ("America/Sao_Paulo", -3, "Brasília"),
-        "são paulo": ("America/Sao_Paulo", -3, "São Paulo"),
-        "sao paulo": ("America/Sao_Paulo", -3, "São Paulo"),
-        "portugal": ("Europe/Lisbon", 0, "Lisboa"),
-        "lisboa": ("Europe/Lisbon", 0, "Lisboa"),
-        "nova york": ("America/New_York", -5, "Nova York"),
-        "new york": ("America/New_York", -5, "Nova York"),
-        "londres": ("Europe/London", 0, "Londres"),
-        "paris": ("Europe/Paris", 1, "Paris"),
-        "tóquio": ("Asia/Tokyo", 9, "Tóquio"),
-        "tokyo": ("Asia/Tokyo", 9, "Tóquio"),
-        "china": ("Asia/Shanghai", 8, "Pequim"),
-        "pequim": ("Asia/Shanghai", 8, "Pequim"),
-        "dubai": ("Asia/Dubai", 4, "Dubai"),
-        "sydney": ("Australia/Sydney", 11, "Sydney"),
-        "utc": ("UTC", 0, "UTC"),
-    }
-    local_lower = local.lower().strip()
-    fuso_info = None
-    for key, info in fusos.items():
-        if key in local_lower:
-            fuso_info = info
-            break
-    if not fuso_info: fuso_info = fusos["brasil"]
-    _, offset, nome = fuso_info
-    utc_now = datetime.now(timezone.utc)
-    local_time = utc_now + timedelta(hours=offset)
-    return {
-        "local": nome,
-        "horario": local_time.strftime("%H:%M"),
-        "data": local_time.strftime("%d/%m/%Y"),
-        "offset": f"UTC{'+' if offset >= 0 else ''}{offset}",
-        "completo": f"{local_time.strftime('%H:%M')} do dia {local_time.strftime('%d/%m/%Y')} em {nome} ({f'UTC{'+' if offset >= 0 else ''}{offset}'})"
-    }
-
-def detectar_pergunta_horario(texto):
-    import unicodedata
-    texto_lower = texto.lower()
-    texto_sem_acento = ''.join(c for c in unicodedata.normalize('NFD', texto_lower) if unicodedata.category(c) != 'Mn')
-    exclusoes = ["criador", "quem", "pasta", "arquivo", "existe", "mostrar", "listar", "abrir", "fechar", "deletar", "criar", "escrever", "codigo", "programa"]
-    if any(ex in texto_sem_acento for ex in exclusoes): return None
-    gatilhos_hora = ["que horas", "que hora", "que horario", "qual horario", "qual hora", "horas sao", "hora atual", "horario atual", "horas agora", "horario em", "hora em", "horas em"]
-    encontrou_gatilho_hora = False
-    for g in gatilhos_hora:
-        g_sem_acento = ''.join(c for c in unicodedata.normalize('NFD', g) if unicodedata.category(c) != 'Mn')
-        if g_sem_acento in texto_sem_acento:
-            encontrou_gatilho_hora = True
-            break
-    locais = ["portugal", "lisboa", "brasil", "brasilia", "sao paulo", "nova york", "new york", "londres", "paris", "toquio", "tokyo", "china", "pequim", "dubai", "sydney", "utc"]
-    menciona_local = any(local in texto_sem_acento for local in locais)
-    menciona_hora = any(h in texto_sem_acento for h in ["hora", "horario"])
-    if not encontrou_gatilho_hora and not (menciona_hora and menciona_local): return None
-    for local in locais:
-        local_sem_acento = ''.join(c for c in unicodedata.normalize('NFD', local) if unicodedata.category(c) != 'Mn')
-        if local_sem_acento in texto_sem_acento:
-            if local in ["brasilia"]: return "brasil"
-            if local in ["toquio"]: return "tokyo"
-            return local
-    return "brasil"
-
-def carregar_base_conhecimento():
-    if os.path.exists(KNOWLEDGE_FILE):
-        try:
-            with open(KNOWLEDGE_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                if isinstance(data, list):
-                    return "\n".join([str(i.get('content', ''))[:200] for i in data[:20]])
-        except: pass
     return "Base de conhecimento local não encontrada."
 
 def extrair_fatos_da_mensagem(user_id: str, texto: str):
-    prompt_extracao = f"""Analise a mensagem do usuário e extraia FATOS para memória de longo prazo.
-Texto: "{texto}"\nRetorne APENAS um JSON puro lista de objetos: [{{"tipo": "...", "chave": "...", "valor": "..."}}]"""
+    prompt_extracao = f"Analise a mensagem do usuário e extraia FATOS para memória de longo prazo.\nTexto: \"{texto}\"\nRetorne APENAS um JSON puro lista de objetos: [{{"tipo": "...", "chave": "...", "valor": "..."}}]"
     try:
         modelo_usado = MODELO_ATIVO if MODELO_ATIVO else "gpt-oss:120b-cloud"
         resp = client.chat.completions.create(model=modelo_usado, messages=[{"role": "user", "content": prompt_extracao}], temperature=0)
@@ -239,7 +36,7 @@ def processar_financas(user_id, texto):
     novo_saldo = saldo_atual + valor if tipo == "entrada" else saldo_atual - valor
     atualizar_saldo(user_id, novo_saldo)
     adicionar_transacao(user_id, tipo, valor, texto[:50])
-    return f"SISTEMA: {tipo.capitalize()} de R$ {valor:.2f} registrada. Saldo: R$ {novo_saldo:.2f}"
+    return f"SISTEMA: {tipo.capitalize()} de R$ {valor:.2f} registrada. Saldo: R$ {novo_saldo:.2f}"       
 
 def processar_comando_iot(user_id, texto):
     if not TVController: return None
@@ -298,7 +95,7 @@ def processar_comandos_sistema(resposta_llm, user_id, profundidade=0):
     for cmd in cmds:
         cmd_lower = cmd.lower()
         if any(p in cmd_lower for p in COMANDOS_PROIBIDOS):
-            if not ("format" in cmd_lower and not any(x in cmd_lower for x in ["c:", "d:", "/fs:"])):
+            if not ("format" in cmd_lower and not any(x in cmd_lower for x in ["c:", "d:", "/fs:"])): 
                 output_extra += f"\n> **BLOQUEADO (SEGURANÇA):** `{cmd}`\n"; continue
 
         print(f"[ACAO] Executando: {cmd}...", flush=True)
@@ -340,10 +137,7 @@ def processar_comandos_sistema(resposta_llm, user_id, profundidade=0):
 
     if erros_detectados and profundidade < 5:
         print(f"[AUTO-FIX] Tentativa {profundidade+1} de 5...", flush=True)
-        prompt = f"""ERRO CRÍTICO DE SISTEMA DETECTADO. TENTE OUTRA ESTRATÉGIA.
-ERROS: {chr(10).join(erros_detectados)}
-OBJETIVO: Corrigir comando para Windows.
-RETORNE APENAS O COMANDO CORRIGIDO no formato [[CMD: ...]]."""
+        prompt = f"ERRO CRÍTICO DE SISTEMA DETECTADO. TENTE OUTRA ESTRATÉGIA.\nERROS: {chr(10).join(erros_detectados)}\nOBJETIVO: Corrigir comando para Windows.\nRETORNE APENAS O COMANDO CORRIGIDO no formato [[CMD: ...]]."
         resp = client.chat.completions.create(model=MODELO_ATIVO, messages=[{"role": "user", "content": prompt}])
         output_extra += f"\n\n[Correcao {profundidade+1}]:\n" + processar_comandos_sistema(resp.choices[0].message.content, user_id, profundidade + 1)
 
@@ -365,26 +159,30 @@ def gerar_resposta_jarvis(user_id, texto):
     transacoes_db = get_transacoes(user_id, limite=10)
     financas_contexto = f"SALDO ATUAL: R$ {saldo_atual:.2f}\nÚLTIMAS TRANSAÇÕES:"
     if transacoes_db:
-        for t in transacoes_db: financas_contexto += f"\n- {t['tipo'].upper()}: R$ {t['valor']:.2f} | {t['descricao']}"
+        for t in transacoes_db: financas_contexto += f"\n- {t['tipo'].upper()}: R$ {t['valor']:.2f} | {t['descricao']}"       
     else: financas_contexto += "\n(Sem transações)"
 
     nome_usuario = usuario.get('nome_preferido') or f"Usuário {str(user_id)[-4:]}"
     agora_br = (datetime.now(timezone.utc) + OFFSET_TEMPORAL).astimezone(timezone(timedelta(hours=-3)))   
     total_chats_ativos = len([c for c in chats_ativos.values() if c.get("processando", False)])
 
-    system_prompt = f"""VOCÊ É J.A.R.V.I.S., UMA IA ASSISTENTE LEAL, ESPIRITUOSA E EFICIENTE.
+    system_prompt = f"""VOCÊ É O JARVIS, UM ASSISTENTE FINANCEIRO AVANÇADO E CONTROLADOR DE SISTEMA COM ACESSO TOTAL (GOD MODE).
 DATA: {agora_br.strftime('%d/%m/%Y %H:%M')}. USUÁRIO MESTRE: {nome_usuario}.
 
-=== SUA PERSONALIDADE ===
-1. Você não é um robô chato. Você é o Jarvis. Tenha personalidade.
-2. Use o contexto passivo (o que foi ouvido antes) para surpreender o usuário.
-3. Se o usuário perguntar "o que eu disse?", responda com precisão usando o histórico.
-4. Respostas curtas e diretas são melhores para chat por voz.
+=== DIRETRIZES ===
+1. ASSISTENTE FINANCEIRO: Gerencie o saldo de {nome_usuario}. Confirme gastos/ganhos.
+2. ACESSO TOTAL: Manipule arquivos, pastas, processos.
+3. SEJA DIRETO: Não peça permissão.
+4. RESPOSTA CURTA: No WhatsApp, seja breve.
+
+=== PROCESSAMENTO MULTI-CHAT ===
+5. Chats simultâneos ativos: {total_chats_ativos}. Não espere.
 
 === COMANDOS ===
 - [[SEARCH: query]] -> Busca na internet.
-- [[AUTO: comando | arg]] -> Automação PC.
+- [[AUTO: comando | arg]] -> Interface (abrir_programa, digitar, clicar, minimizar_tudo).     
 - [[CMD: comando]] -> Terminal.
+- [[READ: path]] / [[WRITE: path | content]] -> Arquivos.
 
 CONTEXTO:
 {usuario['resumo_conversa']}
@@ -392,7 +190,7 @@ CONTEXTO:
 {financas_contexto}
 {info_iot if info_iot else ""}
 {info_financeira if info_financeira else ""}
-"""
+    """
 
     msgs = [{"role": "system", "content": system_prompt}] + [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + [{"role": "user", "content": texto}]
     texto_lower = texto.lower()
@@ -401,7 +199,7 @@ CONTEXTO:
     imagem_b64 = None
     modo_leitura_texto = any(k in texto_lower for k in ["ler texto", "leia o texto", "extrair texto", "copiar texto", "o que está escrito"])
 
-    if any(k in texto_lower for k in ["veja minha tela", "olhe minha tela", "o que está na tela", "leia a tela", "analise a tela"]) or (modo_leitura_texto and "tela" in texto_lower):
+    if any(k in texto_lower for k in ["veja minha tela", "olhe minha tela", "o que está na tela", "leia a tela", "analise a tela"]) or modo_leitura_texto and "tela" in texto_lower:
         print(f"[VISAO] Capturando tela (Modo Texto: {modo_leitura_texto})...", flush=True)
         if modo_leitura_texto:
             screenshot = ImageGrab.grab()
@@ -487,7 +285,7 @@ CONTEXTO:
             except: pass
         threading.Thread(target=bg_task, daemon=True).start()
 
-        res_txt = re.sub(r'\n[CONTEXTO_BUSCA_INTERNO]:.*?(?=\n|$)', '', res_txt, flags=re.DOTALL)
+        res_txt = re.sub(r'\[CONTEXTO_BUSCA_INTERNO\]:.*?(?=\n|$)', '', res_txt, flags=re.DOTALL)
         res_txt = res_txt.replace("--- SISTEMA ---", "").strip()
         return res_txt
     except Exception as e: return f"Erro: {e}"
@@ -522,8 +320,8 @@ def gerar_audio_b64(text):
     for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]:"]:
         text_limpo = text_limpo.replace(tag, "")
     text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL) 
-    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo) 
-    text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ]', '', text_limpo)
+    text_limpo = re.sub(r'\[\[.*?\,\].*?\]\]', '', text_limpo) 
+    text_limpo = re.sub(r'[^ -]', '', text_limpo) 
     text_limpo = text_limpo.strip()
 
     if not text_limpo or len(text_limpo) < 2: return None 
@@ -541,7 +339,7 @@ def gerar_audio_b64(text):
             os.remove(path)
             return b64
         else: return None
-    except Exception as e: 
+    except Exception as e:
         print(f"[ERRO CRÍTICO AUDIO]: {e}", flush=True)
         return None
 
@@ -551,8 +349,8 @@ def gerar_multiplos_audios(text):
     for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]:"]:
         text_limpo = text_limpo.replace(tag, "")
     text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL)
-    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo)
-    text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ]', '', text_limpo)   
+    text_limpo = re.sub(r'\[\[.*?\,\].*?\]\]', '', text_limpo)
+    text_limpo = re.sub(r'[^ -]', '', text_limpo)   
     text_limpo = text_limpo.strip()
 
     if not text_limpo or len(text_limpo) < 2: return []
@@ -571,7 +369,8 @@ def transcrever_audio(base64_data):
     if ffmpeg_path: AudioSegment.converter = ffmpeg_path
     try:
         audio_bytes = base64.b64decode(base64_data)
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t: t.write(audio_bytes); p = t.name
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t:
+            t.write(audio_bytes); p = t.name
         wav = p + ".wav"
         try: AudioSegment.from_file(p).export(wav, format="wav")
         except: return "[ERRO AUDIO FORMATO]"
@@ -677,151 +476,36 @@ STOPWORDS_PASSIVAS = [
 
 @socketio.on('passive_log')
 def handle_passive_log(data):
-    global LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
     user_id = data.get('user_id', 'Mestre')
     texto = data.get('text', '').strip()
     if not texto or len(texto) < 5: return
-    
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
-    current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM PASSIVO] Bloqueado: '{texto}'")
-        return
-    LAST_PROCESSED_TEXT = texto
-    LAST_PROCESSED_TIME = current_time
-    
     texto_lower = texto.lower()
     if any(sw in texto_lower for sw in STOPWORDS_PASSIVAS): return
     print(f"[PASSIVE] Memorizando contexto: '{texto}'")
-    
-    threading.Thread(target=adicionar_mensagem, args=(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")).start()
+    adicionar_mensagem(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")
 
 @socketio.on('active_command')
 @socketio.on('jarvis_command')
 def handle_active_command(data):
-    socketio.start_background_task(process_active_command_bg, data)
-
-def process_active_command_bg(data):
-    global LAST_RESPONSE_HASH, LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
-    
     user_id = data.get('user_id', 'Mestre')
-    texto = data.get('text', '').strip()
-    
-    if not texto or len(texto) < 2: return
-
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
-    current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM ATIVO] Bloqueado: '{texto}'")
-        return
-    LAST_PROCESSED_TEXT = texto
-    LAST_PROCESSED_TIME = current_time
-    # ------------------------------------
-
-    print(f"[ACTIVE] Comando recebido: '{texto}'", flush=True)
-
-    triggers = ["jarvis", "javis", "chaves", "garvis", "assistente", "já vi", "jair"]
-    texto_lower = texto.lower()
-    
-    if texto_lower in triggers:
-        print("[FAST] Apenas gatilho detectado. Respondendo 'Pois não?'.")
-        resposta = "Pois não?"
-        audio_b64 = gerar_audio_b64(resposta)
-        socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': True})
-        return
-
+    texto = data.get('text', '')
+    if not texto or len(texto.strip()) < 2: return
+    print(f"[ACTIVE] Comando direto: '{texto}'", flush=True)
     resposta = gerar_resposta_jarvis(user_id, texto)
-    
-    resp_hash = hashlib.md5(resposta.encode('utf-8')).hexdigest()
-    if resp_hash == LAST_RESPONSE_HASH["text"] and (current_time - LAST_RESPONSE_HASH["time"]) < 1.0:
-        print("[DUPLICIDADE] Bloqueando TTS repetido.")
-        return
-    LAST_RESPONSE_HASH = {"text": resp_hash, "time": current_time}
-    
     audio_b64 = gerar_audio_b64(resposta)
     termos_fim = ['tchau', 'até logo', 'obrigado jarvis', 'encerrar', 'dormir']
     continuar = not any(t in resposta.lower() for t in termos_fim)
-    
-    socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
-    
+    emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
     try:
         audios = gerar_multiplos_audios(resposta)
         if audios and len(audios) > 1:
-            socketio.emit('audio_parts_start', {'total': len(audios)})
+            emit('audio_parts_start', {'total': len(audios)})
             for part in audios:
-                socketio.emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{part['audio']}", 'parte': part['parte'], 'total': part['total']})
-            socketio.emit('audio_parts_end', {'total': len(audios)})
+                emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{part['audio']}", 'parte': part['parte'], 'total': part['total']})
+            emit('audio_parts_end', {'total': len(audios)})
     except: pass
 
 @socketio.on('message_text')
 def handle_legacy_message_text(data):
     handle_web({'text': data.get('data'), 'user_id': 'LegacyUser'})
 
-# --- Utilitários de Modelo ---
-import requests
-
-def get_installed_models():
-    try:
-        resp = requests.get("http://127.0.0.1:11434/api/tags", timeout=0.5)
-        if resp.status_code == 200:
-            return [m.get('name', '?') for m in resp.json().get('models', [])]
-    except: pass
-    return ['qwen2.5-coder:32b', 'gpt-oss:120b-cloud', 'mistral', 'llama3', 'deepseek-r1']
-
-@socketio.on('connect') 
-def handle_connect():
-    emit('lista_modelos', {'modelos': get_installed_models(), 'atual': MODELO_ATIVO})
-
-@socketio.on('listar_modelos')
-def handle_models():
-    emit('lista_modelos', {'modelos': get_installed_models(), 'atual': MODELO_ATIVO})
-
-@socketio.on('trocar_modelo')
-def handle_model_change(data):
-    global MODELO_ATIVO
-    MODELO_ATIVO = data.get('modelo')
-    emit('log', {'data': f"Modelo: {MODELO_ATIVO}"})
-
-def gerar_qrcode_conexao(url):
-    if qrcode is None: return
-    try:
-        qr_img = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
-        qr_img.add_data(url); qr_img.make(fit=True)
-        img = qr_img.make_image(fill_color="black", back_color="white")
-        qr_path = os.path.join(BASE_DIR, "connect_qr.png")
-        img.save(qr_path)
-        if sys.platform == 'win32': os.startfile(qr_path)
-    except Exception as e: print(f"[QR] Erro: {e}")
-
-if __name__ == '__main__':
-    import logging
-    logging.getLogger('werkzeug').setLevel(logging.ERROR)
-    logging.getLogger('socketio').setLevel(logging.ERROR)
-    logging.getLogger('engineio').setLevel(logging.ERROR)
-
-    print("\n" * 2)
-    print("=========================================")
-    print("   JARVIS V12 - SISTEMA INTEGRADO")
-    print("=========================================")
-
-    print("[REDE] Iniciando Tunel Cloudflare...", flush=True)
-    try:
-        from pycloudflared import try_cloudflare
-        public_url_obj = try_cloudflare(port=5000)
-        public_url = public_url_obj.tunnel
-        print(f"\nACESSO REMOTO LIBERADO: {public_url}\n", flush=True)
-
-        if not os.path.exists("docs"): os.makedirs("docs")
-        with open(os.path.join("docs", "LINK_JARVIS.txt"), "w") as f: f.write(public_url)
-        gerar_qrcode_conexao(public_url)
-    except:
-        print("[REDE] Fallback Local", flush=True)
-        gerar_qrcode_conexao("http://localhost:5000")
-
-    def start_zap():
-        zap_path = os.path.join(BASE_DIR, "jarvis-mcp-whatsapp")
-        if os.path.exists(zap_path): subprocess.Popen(f'start cmd /k "cd /d {zap_path} && npm start"', shell=True)
-
-    # threading.Thread(target=start_zap, daemon=True).start()
-    print("[SISTEMA] Servidor Online. Aguardando comandos...", flush=True)
-    socketio.run(app, debug=False, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True)

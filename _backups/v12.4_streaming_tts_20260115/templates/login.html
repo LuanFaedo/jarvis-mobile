@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JARVIS - Acesso</title>
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #00ff41;
+            font-family: 'Consolas', 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            border: 1px solid #00ff41;
+            padding: 40px;
+            box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+            width: 300px;
+            text-align: center;
+        }
+        h1 { margin-bottom: 30px; font-size: 24px; text-transform: uppercase; letter-spacing: 2px; }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background: #161b22;
+            border: 1px solid #30363d;
+            color: white;
+            box-sizing: border-box;
+            outline: none;
+        }
+        input:focus { border-color: #00ff41; }
+        button {
+            width: 100%;
+            padding: 10px;
+            background: #00ff41;
+            color: black;
+            border: none;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 10px;
+            text-transform: uppercase;
+        }
+        button:hover { background: #00cc33; }
+        .links { margin-top: 20px; font-size: 12px; }
+        a { color: #58a6ff; text-decoration: none; }
+        .error { color: #ff4444; margin-bottom: 15px; font-size: 14px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Acesso Restrito</h1>
+        
+        {% if error %}
+            <div class="error">⚠ {{ error }}</div>
+        {% endif %}
+
+        <form method="POST">
+            <input type="text" name="username" placeholder="Identificação" required autocomplete="off">
+            <input type="password" name="password" placeholder="Chave de Acesso" required>
+            <button type="submit">
+                {% if mode == 'register' %} REGISTRAR {% else %} INICIAR {% endif %}
+            </button>
+        </form>
+
+        <div class="links">
+            {% if mode == 'register' %}
+                <a href="/login">Já possui acesso? Entrar</a>
+            {% else %}
+                <a href="/register">Solicitar novo acesso</a>
+            {% endif %}
+        </div>
+    </div>
+</body>
+</html>

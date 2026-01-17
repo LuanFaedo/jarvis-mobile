@@ -1,0 +1,28 @@
+[DB] Banco de dados inicializado
+
+
+
+=========================================
+   JARVIS V12 - SISTEMA INTEGRADO
+=========================================
+[REDE] Iniciando Tunel Cloudflare...
+ * Running on https://draw-editions-unique-persons.trycloudflare.com
+ * Traffic stats available on http://127.0.0.1:20241/metrics
+
+ACESSO REMOTO LIBERADO: https://draw-editions-unique-persons.trycloudflare.com
+
+[SISTEMA] Servidor Online. Aguardando comandos...
+ * Serving Flask app 'app'
+ * Debug mode: off
+[PASSIVE] Memorizando contexto: 'Estou testando o sistema'
+[PASSIVE] Memorizando contexto: 'O processador está esquentando'
+[PASSIVE] Memorizando contexto: 'Preciso comprar café'
+[ACTIVE] Comando direto: 'Jarvis, o que eu preciso comprar?'
+[AUDIO] Gerando voz para: Você precisa comprar café....
+[AUDIO] Gerando voz para: Você precisa comprar café....
+[ACTIVE] Comando direto: 'Jarvis que horas são?'
+[AUDIO] Gerando voz para: Agora são 11 horas e 4 minutos em Brasília....
+[ACTIVE] Comando direto: 'Jarvis que horas são?'
+[AUDIO] Gerando voz para: Agora são 11 horas e 4 minutos em Brasília....
+[AUDIO] Gerando voz para: Agora são 11 horas e 4 minutos em Brasília....
+[AUDIO] Gerando voz para: Agora são 11 horas e 4 minutos em Brasília....

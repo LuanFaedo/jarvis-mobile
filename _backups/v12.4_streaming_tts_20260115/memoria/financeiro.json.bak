@@ -1,0 +1,95 @@
+{
+  "saldo": -19.99,
+  "transacoes": [
+    {
+      "data": "05/01/2026 21:34",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Consulta de saldo",
+      "saldo_anterior": 0.0,
+      "saldo_apos": 0.0
+    },
+    {
+      "data": "05/01/2026 21:35",
+      "tipo": "entrada",
+      "valor": 10.0,
+      "desc": "Recebimento",
+      "saldo_anterior": 0.0,
+      "saldo_apos": 10.0
+    },
+    {
+      "data": "05/01/2026 21:35",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Consulta de saldo",
+      "saldo_anterior": 10.0,
+      "saldo_apos": 10.0
+    },
+    {
+      "data": "05/01/2026 21:35",
+      "tipo": "saida",
+      "valor": 3.5,
+      "desc": "Gasto com carro",
+      "saldo_anterior": 10.0,
+      "saldo_apos": 6.5
+    },
+    {
+      "data": "05/01/2026 21:35",
+      "tipo": "saida",
+      "valor": 0.0,
+      "desc": "Consulta de gasto",
+      "saldo_anterior": 6.5,
+      "saldo_apos": 6.5
+    },
+    {
+      "data": "05/01/2026 21:36",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Consulta sem valor",
+      "saldo_anterior": 6.5,
+      "saldo_apos": 6.5
+    },
+    {
+      "data": "05/01/2026 21:41",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Consulta de saldo",
+      "saldo_anterior": 6.5,
+      "saldo_apos": 6.5
+    },
+    {
+      "data": "05/01/2026 21:41",
+      "tipo": "ajuste",
+      "valor": 0.0,
+      "desc": "Zerar saldo",
+      "saldo_anterior": 6.5,
+      "saldo_apos": 0.0
+    },
+    {
+      "data": "05/01/2026 21:42",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Consulta de saldo",
+      "saldo_anterior": 0.0,
+      "saldo_apos": 0.0
+    },
+    {
+      "data": "05/01/2026 21:43",
+      "tipo": "saida",
+      "valor": 19.99,
+      "desc": "Ração do cachorro",
+      "saldo_anterior": 0.0,
+      "saldo_apos": -19.99
+    },
+    {
+      "data": "05/01/2026 21:45",
+      "tipo": "entrada",
+      "valor": 0.0,
+      "desc": "Nenhum movimento financeiro informado",
+      "saldo_anterior": -19.99,
+      "saldo_apos": -19.99
+    }
+  ],
+  "metas": {},
+  "categorias": {}
+}

@@ -1,0 +1,19 @@
+
+## 🛠️ Evolução do Sistema (16/01/2026)
+
+### 1. Arquitetura Híbrida Ativa/Passiva (Alexa Mode)
+- **Implementação:** O Jarvis agora opera em modo de escuta contínua.
+- **Modo Passivo:** Captura conversas ambiente e salva no banco como `[CONTEXTO AMBIENTE]` sem responder (Memória Contínua).
+- **Modo Ativo:** Ativado pela palavra-chave "Jarvis". Entra em uma janela de comando de 3 segundos (Timeout). Qualquer fala nesse intervalo é tratada como comando direto.
+- **Frontend (Flutter):** Reescrito `main.dart` do zero para suportar loop infinito de escuta, detecção agressiva de silêncio (2s) e gerenciamento de estados (Azul=Passivo, Laranja=Ativo).
+
+### 2. Unificação do Backend
+- **Consolidação:** O arquivo `server.py` foi deletado e todas as suas funcionalidades migradas para o `app.py` (Versão 12 consolidada).
+- **Compatibilidade:** O `app.py` agora suporta eventos legados (`message_text`) e novos (`active_command`, `passive_log`).
+- **Segurança:** Implementado Debounce de Entrada (2s) e Cache de Saída (Hash 1s) para evitar loops de áudio e duplicidade.
+
+### 3. Estabilização e Correções
+- **Loop Infinito:** Corrigido o erro de `AssertionError` e loops de eco onde o Jarvis ouvia a si mesmo.
+- **Backup:** Criado backup total em `_backups/Jarvis_V12_MemoriaContinua_20260116_1020`.
+- **Integridade:** Arquivo `app.py` limpo de artefatos de encoding (null bytes) e erros de sintaxe do PowerShell.
+- **Pausa de Módulos:** Integração com WhatsApp comentada no script principal para economizar recursos durante o desenvolvimento do Mobile.

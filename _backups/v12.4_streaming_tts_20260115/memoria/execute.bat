@@ -1,0 +1,1 @@
+python popular_memoria_total.py
