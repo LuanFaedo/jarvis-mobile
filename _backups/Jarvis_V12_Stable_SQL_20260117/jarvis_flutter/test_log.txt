@@ -1,0 +1,16 @@
+[DB] Banco de dados inicializado
+
+
+
+=========================================
+   JARVIS V12 - SISTEMA INTEGRADO
+=========================================
+[REDE] Iniciando Tunel Cloudflare...
+ * Running on https://foods-sublime-buying-hollow.trycloudflare.com
+ * Traffic stats available on http://127.0.0.1:20241/metrics
+
+ACESSO REMOTO LIBERADO: https://foods-sublime-buying-hollow.trycloudflare.com
+
+[SISTEMA] Servidor Online. Aguardando comandos...
+ * Serving Flask app 'app'
+ * Debug mode: off

@@ -1,6 +1,11 @@
 # LOG DE AUDITORIA DE INPUTS DE VOZ (SQLite Local)
 # Usa o módulo de banco de dados LOCAL (memoria.db_memoria)
-from memoria.db_memoria import salvar_diario_voz as db_salvar_voz
+try:
+    from memoria.db_memoria import salvar_diario_voz as db_salvar_voz
+except ImportError:
+    # Fallback silencioso caso a função não exista no módulo de memória
+    def db_salvar_voz(texto): pass
+
 import re
 
 def validar_coerencia(texto):

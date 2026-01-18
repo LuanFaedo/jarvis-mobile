@@ -1,0 +1,14 @@
+
+## 🛡️ Protocolo de Estabilidade e Anti-Spam (16/01/2026)
+
+### 1. Problema de "Gagueira" Solucionado
+- **Sintoma:** O App enviava comandos repetidos ("Olá", "Olá Jarvis") em milissegundos, travando o socket.
+- **Solução Frontend (Flutter):** Implementado `_lastSentText` e timer de limpeza. O App agora ignora frases idênticas enviadas em um intervalo de 5 segundos. Também ignora fragmentos menores que 5 caracteres.
+- **Solução Backend (Python):** Implementado `LAST_PROCESSED_TEXT` global. O servidor ignora qualquer comando idêntico ao anterior recebido em menos de 3 segundos.
+
+### 2. Ajuste de Tempos de Fala
+- **PauseFor:** Aumentado para **3 segundos**. Isso permite pausas naturais na fala (respiração) sem cortar o comando no meio.
+
+### 3. Validação Técnica
+- **Testes Realizados:** Simulação de ataque de spam confirmou que o servidor bloqueia a segunda requisição com o log `[SPAM ATIVO] Bloqueado`.
+- **Status:** Sistema estável, sem erros de `AssertionError` ou `NameError`.

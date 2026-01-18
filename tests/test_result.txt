@@ -1,1 +1,23 @@
-[TESTE] Erro ao conectar: HTTPConnectionPool(host='localhost', port=5000): Max retries exceeded with url: /socket.io/?transport=polling&EIO=4&t=1768438539.7079751 (Caused by NewConnectionError("HTTPConnection(host='localhost', port=5000): Failed to establish a new connection: [WinError 10061] Nenhuma conexão pôde ser feita porque a máquina de destino as recusou ativamente"))
+Exception in thread Thread-5 (_handle_eio_message):
+Traceback (most recent call last):
+  File "C:\Python313\Lib\threading.py", line 1043, in _bootstrap_inner
+    self.run()
+    ~~~~~~~~^^
+  File "C:\Python313\Lib\threading.py", line 994, in run
+    self._target(*self._args, **self._kwargs)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\luanf\AppData\Roaming\Python\Python313\site-packages\socketio\client.py", line 529, in _handle_eio_message
+    self._handle_event(pkt.namespace, pkt.id, pkt.data)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\luanf\AppData\Roaming\Python\Python313\site-packages\socketio\client.py", line 395, in _handle_event
+    r = self._trigger_event(data[0], namespace, *data[1:])
+  File "C:\Users\luanf\AppData\Roaming\Python\Python313\site-packages\socketio\client.py", line 445, in _trigger_event
+    return handler(*args)
+  File "C:\Users\luanf\AndroidStudioProjects\MyApplication\jarvis-mobile\tests\test_socket.py", line 17, in bot_msg
+    print(f"\n[TESTE] Resposta do Jarvis: {data.get('data')}")
+    ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Python313\Lib\encodings\cp1252.py", line 19, in encode
+    return codecs.charmap_encode(input,self.errors,encoding_table)[0]
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeEncodeError: 'charmap' codec can't encode character '\u202f' in position 71: character maps to <undefined>
+^C

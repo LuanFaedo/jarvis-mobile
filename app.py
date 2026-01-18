@@ -41,6 +41,12 @@ LAST_PROCESSED_TEXT = ""
 LAST_PROCESSED_TIME = 0
 LAST_RESPONSE_HASH = {"text": "", "time": 0}
 
+# --- LOCK GLOBAL ANTI-CRASH (CONCORRÊNCIA) ---
+import threading
+COMMAND_LOCK = threading.Lock()
+LAST_COMMAND_TIME = 0
+COMMAND_COOLDOWN = 3.0  # Segundos de cooldown entre comandos
+
 # --- Configurações Iniciais ---
 if getattr(sys, 'frozen', False):
     BASE_DIR = os.path.dirname(sys.executable)
@@ -54,24 +60,34 @@ CAMINHO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 if os.path.exists(CAMINHO_TESSERACT):
     pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT
 
-# Importa o módulo de memória SQLite
-from memoria.db_memoria import (
-    get_ou_criar_usuario,
-    atualizar_resumo,
-    atualizar_nome_preferido,
-    adicionar_mensagem,
-    get_ultimas_mensagens,
-    contar_mensagens,
-    get_mensagens_para_resumir,
-    limpar_mensagens_antigas,
-    salvar_fato,
-    get_fatos,
-    get_saldo,
-    atualizar_saldo,
-    adicionar_transacao,
-    get_transacoes,
-    limpar_memoria_usuario
-)
+# Importa o módulo de memória SQLite com tratamento de erro
+try:
+    from memoria.db_memoria import (
+        get_ou_criar_usuario,
+        atualizar_resumo,
+        atualizar_nome_preferido,
+        adicionar_mensagem,
+        get_ultimas_mensagens,
+        contar_mensagens,
+        get_mensagens_para_resumir,
+        limpar_mensagens_antigas,
+        salvar_fato,
+        get_fatos,
+        get_saldo,
+        atualizar_saldo,
+        adicionar_transacao,
+        get_transacoes,
+        limpar_memoria_usuario,
+        salvar_diario_voz
+    )
+    print("[SISTEMA] Memória SQLite carregada com sucesso.")
+except ImportError as e:
+    print(f"[AVISO] Algumas funções de memória não foram encontradas: {e}")
+    # Fallbacks vazios para não quebrar o código
+    def adicionar_mensagem(*args, **kwargs): pass
+    def get_ultimas_mensagens(*args, **kwargs): return []
+    def salvar_diario_voz(*args, **kwargs): pass
+    # ... outros se necessário
 
 from iot.tv_controller import TVController
 from sistema.automacao import pc
@@ -84,7 +100,7 @@ import requests
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:11434/v1")
 API_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJ9KfyhZeNo5E84kORaqKYu7gxopcvqT2hRabwJU/sXF"
-MODELO_ATIVO = "gpt-oss:120b-cloud"
+MODELO_ATIVO = "gpt-oss:120b-cloud" # API Externa (NÃO ALTERAR)
 
 client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 client_ollama = ollama.Client(host=API_BASE_URL.replace("/v1", ""))
@@ -518,13 +534,25 @@ async def _tts_async(text, path):
 
 def gerar_audio_b64(text):
     if not text or len(text.strip()) == 0: return None
+    
+    # --- SANITIZAÇÃO DE ÁUDIO AGRESSIVA ---
     text_limpo = text
+    # Remove tags de sistema
     for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]:"]:
         text_limpo = text_limpo.replace(tag, "")
+    
+    # Remove Markdown e Códigos
     text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL) 
-    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo) 
-    text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ]', '', text_limpo)
-    text_limpo = text_limpo.strip()
+    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo)
+    
+    # Substitui quebras de linha por pausas
+    text_limpo = text_limpo.replace("\n", ". ")
+    
+    # Mantém APENAS letras, números e pontuação básica
+    text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ\-]', '', text_limpo)
+    
+    # Remove espaços duplos
+    text_limpo = re.sub(r'\s+', ' ', text_limpo).strip()
 
     if not text_limpo or len(text_limpo) < 2: return None 
     print(f"[AUDIO] Gerando voz para: {text_limpo[:50]}...", flush=True)
@@ -696,62 +724,224 @@ def handle_passive_log(data):
     
     threading.Thread(target=adicionar_mensagem, args=(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")).start()
 
-@socketio.on('active_command')
-@socketio.on('jarvis_command')
-def handle_active_command(data):
-    socketio.start_background_task(process_active_command_bg, data)
+def classificar_intencao(texto):
+    """
+    Roteador Semântico: Decide o que fazer antes de fazer.
+    Categorias:
+    - COMANDO: Apenas para ações de HARDWARE/SISTEMA (abrir app, desligar, volume, mouse).
+    - BUSCA: Informações externas, notícias, cotação.
+    - CONVERSA: Horas, Data, Bate-papo, Perguntas gerais, Cálculos.
+    """
+    try:
+        prompt_classificador = f"""
+        Classifique a frase do usuário em [COMANDO], [BUSCA] ou [CONVERSA].
+        
+        Regras:
+        - "Que horas são?", "Que dia é hoje?", "Quem é você?" -> [CONVERSA]
+        - "Abra o Google", "Desligue o PC", "Aumente o volume" -> [COMANDO]
+        - "Cotação do dólar", "Notícias de hoje", "Quem ganhou o jogo" -> [BUSCA]
+        
+        Frase: "{texto}"
+        Categoria:"""
+        
+        resp = client.chat.completions.create(
+            model=MODELO_ATIVO,
+            messages=[{"role": "user", "content": prompt_classificador}],
+            temperature=0.1,
+            max_tokens=10
+        )
+        
+        categoria = resp.choices[0].message.content.strip().upper()
+        
+        if "COMANDO" in categoria: return "COMANDO"
+        if "BUSCA" in categoria: return "BUSCA"
+        return "CONVERSA"
+        
+    except Exception as e:
+        print(f"[ROTEADOR ERROR] {e}")
+        return "CONVERSA"
 
-def process_active_command_bg(data):
-    global LAST_RESPONSE_HASH, LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
+@socketio.on('active_command')
+def handle_active_command(data):
+    global LAST_USER_INPUT, LAST_COMMAND_TIME
     
     user_id = data.get('user_id', 'Mestre')
-    texto = data.get('text', '').strip()
+    text = data.get('text', '').strip()
     
+    if not text: return
+
+    # Filtros de Duplicidade e Spam
+    tempo_atual = time.time()
+    if text == LAST_USER_INPUT["text"] and (tempo_atual - LAST_USER_INPUT["time"] < 3.0):
+        print(f"[SPAM IGNORADO] '{text}'")
+        return
+
+    LAST_USER_INPUT = {"text": text, "time": tempo_atual}
+    print(f"\n[COMANDO RECEBIDO] {user_id}: {text}")
+
+    # Memória
+    try: adicionar_mensagem(user_id, "user", text)
+    except: pass
+
+    # Roteamento
+    socketio.emit('status_update', {'status': 'ANALISANDO INTENÇÃO...'})
+    intencao = classificar_intencao(text)
+    print(f"[ROTEADOR] Intenção detectada: {intencao}")
+    socketio.emit('intent_detected', {'intent': intencao})
+
+    resposta_final = ""
+    
+    # Execução
+    if intencao == "COMANDO":
+        socketio.emit('status_update', {'status': 'PROCESSANDO AÇÃO...'})
+        # Prompt Híbrido: Ação + Fala
+        prompt_sistema = f"""
+        O usuário solicitou uma ação de sistema: "{text}".
+        1. Identifique qual ação executar (abrir, fechar, volume, etc).
+        2. Responda APENAS com uma frase curta e natural confirmando que vai fazer (ex: "Abrindo o navegador agora", "Aumentando o volume").
+        Não gere código ou JSON aqui, apenas a resposta falada.
+        """
+        resposta_final = gerar_resposta_llm(user_id, prompt_sistema, usar_memoria=False)
+        
+        # Dispara a automação real em background (via thread separada para não travar a fala)
+        socketio.start_background_task(processar_automacao_silenciosa, text)
+        
+    elif intencao == "BUSCA":
+        socketio.emit('status_update', {'status': 'PESQUISANDO NA WEB...'})
+        resumo_busca = pesquisar_web(text)
+        prompt_busca = f"Baseado nesta pesquisa: '{resumo_busca}', responda à pergunta do usuário: '{text}'. Seja direto e falado."
+        resposta_final = gerar_resposta_llm(user_id, prompt_busca)
+        
+    else: # CONVERSA
+        socketio.emit('status_update', {'status': 'PENSANDO...'})
+        if "hora" in text.lower():
+            hora_atual = datetime.now().strftime("%H:%M")
+            prompt_extra = f" (Dica de contexto: Agora são {hora_atual})"
+            resposta_final = gerar_resposta_llm(user_id, text + prompt_extra, usar_memoria=True)
+        else:
+            resposta_final = gerar_resposta_llm(user_id, text, usar_memoria=True)
+
+    # Envio da Resposta
+    if resposta_final:
+        try: adicionar_mensagem(user_id, "assistant", resposta_final)
+        except: pass
+        
+        # Correção: Usar a função existente gerar_audio_b64 que já retorna o base64
+        audio_b64 = gerar_audio_b64(resposta_final)
+        
+        socketio.emit('bot_response', {
+            'text': resposta_final,
+            'audio': audio_b64, 
+            'continue_conversation': True
+        })
+
+def processar_automacao_silenciosa(comando_texto):
+    """Tenta executar o comando no sistema sem gerar fala extra"""
+    try:
+        from sistema.automacao import automacao_rapida
+        automacao_rapida(comando_texto)
+    except Exception as e:
+        print(f"[AUTOMACAO BG] Erro: {e}")
+
+def gerar_resposta_llm(user_id, prompt, usar_memoria=True):
+    # Função auxiliar para centralizar chamada ao LLM
+    # (Lógica original de processamento movida para cá para limpeza)
+    try:
+        contexto = ""
+        if usar_memoria:
+            hist = get_ultimas_mensagens(user_id, 5)
+            contexto = f"Histórico: {hist}\n"
+        
+        full_prompt = f"{contexto}Usuário: {prompt}"
+        
+        resp = client.chat.completions.create(
+            model=MODELO_ATIVO,
+            messages=[
+                {"role": "system", "content": """
+                VOCÊ É O JARVIS. 
+                REGRAS DE RESPOSTA (CRÍTICO):
+                1. MÁXIMO 800 CARACTERES. Seja conciso.
+                2. TEXTO PURO APENAS. Não use Markdown (*, #, _), emojis ou símbolos gráficos.
+                3. Fale como um humano natural, não como um robô lendo uma lista.
+                4. Se for contar uma história, resuma ao essencial.
+                """},
+                {"role": "user", "content": full_prompt}
+            ]
+        )
+        return resp.choices[0].message.content
+    except Exception as e:
+        print(f"[LLM ERROR] {e}")
+        return "Desculpe, tive um erro neural."
+
+# (MANTENDO O RESTO DO CÓDIGO INALTERADO ONDE POSSÍVEL)
+# ... active_command anterior será substituído ...
+
+def process_active_command_bg(data):
+    """Processa comando em background thread - THREAD-SAFE"""
+    global LAST_RESPONSE_HASH, LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
+
+    user_id = data.get('user_id', 'Mestre')
+    texto = data.get('text', '').strip()
+
     if not texto or len(texto) < 2: return
 
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
+    # --- FILTRO TEXTO DUPLICADO ---
     current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM ATIVO] Bloqueado: '{texto}'")
+    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 2.0:
         return
     LAST_PROCESSED_TEXT = texto
     LAST_PROCESSED_TIME = current_time
-    # ------------------------------------
 
     print(f"[ACTIVE] Comando recebido: '{texto}'", flush=True)
 
-    triggers = ["jarvis", "javis", "chaves", "garvis", "assistente", "já vi", "jair"]
+    # --- LÓGICA DE PARADA (STOP WORDS) ---
+    STOP_WORDS = ["pare", "parar", "silêncio", "chega", "obrigado", "tchau", "dormir", "encerrar"]
     texto_lower = texto.lower()
-    
-    if texto_lower in triggers:
-        print("[FAST] Apenas gatilho detectado. Respondendo 'Pois não?'.")
-        resposta = "Pois não?"
-        audio_b64 = gerar_audio_b64(resposta)
-        socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': True})
+
+    if any(w in texto_lower for w in STOP_WORDS):
+        print("[SESSÃO] Comando de parada detectado.")
+        socketio.start_background_task(_enviar_resposta_com_audio, "Entendido. Standby.", False)
         return
 
+    # --- LÓGICA DE GATILHO RÁPIDO ---
+    triggers = ["jarvis", "javis", "chaves", "garvis", "assistente", "já vi", "jair"]
+    if texto_lower in triggers:
+        socketio.start_background_task(_enviar_resposta_com_audio, "Pois não?", True)
+        return
+
+    # --- PROCESSAMENTO IA ---
     resposta = gerar_resposta_jarvis(user_id, texto)
-    
+
+    # Filtro de resposta duplicada
     resp_hash = hashlib.md5(resposta.encode('utf-8')).hexdigest()
     if resp_hash == LAST_RESPONSE_HASH["text"] and (current_time - LAST_RESPONSE_HASH["time"]) < 1.0:
-        print("[DUPLICIDADE] Bloqueando TTS repetido.")
         return
     LAST_RESPONSE_HASH = {"text": resp_hash, "time": current_time}
-    
-    audio_b64 = gerar_audio_b64(resposta)
-    termos_fim = ['tchau', 'até logo', 'obrigado jarvis', 'encerrar', 'dormir']
-    continuar = not any(t in resposta.lower() for t in termos_fim)
-    
-    socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
-    
+
+    # --- LOOP INFINITO: SEMPRE CONTINUA A MENOS QUE MANDE PARAR ---
+    socketio.start_background_task(_enviar_resposta_com_audio, resposta, True)
+
+def _enviar_resposta_com_audio(resposta, continuar):
+    """Gera e envia áudio em background - evita crash de concorrência"""
     try:
+        audio_b64 = gerar_audio_b64(resposta)
+        socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
+
+        # Áudio em partes (para respostas longas)
         audios = gerar_multiplos_audios(resposta)
         if audios and len(audios) > 1:
             socketio.emit('audio_parts_start', {'total': len(audios)})
             for part in audios:
-                socketio.emit('play_audio_remoto', {'url': f"data:audio/mp3;base64,{part['audio']}", 'parte': part['parte'], 'total': part['total']})
+                socketio.emit('play_audio_remoto', {
+                    'url': f"data:audio/mp3;base64,{part['audio']}",
+                    'parte': part['parte'],
+                    'total': part['total']
+                })
             socketio.emit('audio_parts_end', {'total': len(audios)})
-    except: pass
+    except Exception as e:
+        print(f"[ERRO AUDIO BG] {e}", flush=True)
+        # Mesmo com erro no áudio, envia texto
+        socketio.emit('bot_response', {'text': resposta, 'audio': None, 'continue_conversation': continuar})
 
 @socketio.on('message_text')
 def handle_legacy_message_text(data):

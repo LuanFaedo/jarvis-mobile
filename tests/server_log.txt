@@ -1,1 +1,1 @@
-python: can't open file 'C:\\WORD\\tests\\app.py': [Errno 2] No such file or directory
+python: can't open file 'C:\\Users\\luanf\\AndroidStudioProjects\\MyApplication\\jarvis-mobile\\tests\\app.py': [Errno 2] No such file or directory
