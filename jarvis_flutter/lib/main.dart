@@ -97,7 +97,7 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
   }
 
   Future<void> _initSystem() async {
-    await [Permission.microphone, Permission.storage].request();
+    await [Permission.microphone, Permission.storage, Permission.camera].request();
     _speechEnabled = await _speech.initialize(
       onStatus: _onSpeechStatus,
       onError: (e) => print('[STT ERROR] ${e.errorMsg}'),
@@ -131,6 +131,12 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
       socket.on('bot_response', (data) => _handleServerResponse(data));
       socket.on('status_update', (data) => setState(() => _statusText = data['status'] ?? _statusText));
       socket.on('intent_detected', (data) => setState(() => _statusText = "MODO: ${data['intent']}"));
+      
+      socket.on('force_stop_playback', (_) async {
+        print("[CLIENT] Comando de parada recebido.");
+        await _audioPlayer.stop();
+        setState(() => _statusText = "SILÊNCIO...");
+      });
 
     } catch (e) {
       setState(() => _statusText = "ERRO: $e");
@@ -151,17 +157,18 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
           setState(() => _lastTranscript = text);
           
           _manualSilenceTimer?.cancel();
-          _manualSilenceTimer = Timer(const Duration(milliseconds: 1500), () {
-             if (text != _lastSentText) {
+          _manualSilenceTimer = Timer(const Duration(milliseconds: 3000), () {
+             if (text.isNotEmpty && text != _lastSentText) {
                _sendCommand(text);
              }
           });
         },
         listenFor: const Duration(seconds: 60),
-        pauseFor: const Duration(seconds: 2), // Pausa curta
+        pauseFor: const Duration(seconds: 10), // Pausa nativa longa para respeitar o timer manual
         localeId: 'pt_BR',
         cancelOnError: false,
         partialResults: true,
+        onDevice: true, // Força o uso do motor on-device se disponível (mais rápido/estável)
       );
     } catch (e) {
       Future.delayed(const Duration(seconds: 1), _startContinuousListening);
@@ -170,7 +177,7 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
 
   void _onSpeechStatus(String status) {
     if ((status == 'notListening' || status == 'done') && _isConnected && mounted) {
-      Future.delayed(const Duration(milliseconds: 500), _startContinuousListening);
+      Future.delayed(const Duration(milliseconds: 100), _startContinuousListening);
     }
   }
 
@@ -206,6 +213,35 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
     }
   }
 
+  Future<void> _scanQRCode() async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text("Escanear QR Code")),
+          body: MobileScanner(
+            onDetect: (capture) {
+              final List<Barcode> barcodes = capture.barcodes;
+              for (final barcode in barcodes) {
+                if (barcode.rawValue != null) {
+                  Navigator.pop(context, barcode.rawValue);
+                  break; 
+                }
+              }
+            },
+          ),
+        ),
+      ),
+    );
+
+    if (result != null) {
+      setState(() {
+        _urlController.text = result;
+      });
+      _connectToServer();
+    }
+  }
+
   // --- UI SIMPLIFICADA (SAFE MODE) ---
 
   @override
@@ -216,6 +252,10 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
         elevation: 0,
         title: Text("JARVIS V12", style: GoogleFonts.orbitron(color: Colors.cyan)),
         actions: [
+          IconButton(
+            icon: Icon(Icons.qr_code_scanner, color: Colors.cyanAccent),
+            onPressed: _scanQRCode,
+          ),
           IconButton(
             icon: Icon(Icons.flash_on, color: Colors.yellow), // Teste
             onPressed: () => _sendCommand("teste de conexão"),
@@ -230,29 +270,7 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
         children: [
           Expanded(
             child: Center(
-              child: AnimatedBuilder(
-                animation: _pulseController,
-                builder: (context, child) {
-                  return Container(
-                    width: 200 + (_pulseController.value * 20),
-                    height: 200 + (_pulseController.value * 20),
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      border: Border.all(color: Colors.cyan, width: 2),
-                      boxShadow: [
-                        BoxShadow(color: Colors.cyan.withOpacity(0.5), blurRadius: 20 * _pulseController.value)
-                      ],
-                    ),
-                    child: Center(
-                      child: Icon(
-                        _isConnected ? Icons.mic : Icons.mic_off,
-                        size: 80,
-                        color: _isConnected ? Colors.cyan : Colors.red,
-                      ),
-                    ),
-                  );
-                },
-              ),
+              child: GlobeVisualizer(isConnected: _isConnected, isTalking: _statusText == "FALANDO..."),
             ),
           ),
           Padding(
@@ -308,4 +326,132 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
       ),
     );
   }
+}
+
+// --- GLOBO 3D NATIVO (REATOR ARK) ---
+
+class GlobeVisualizer extends StatefulWidget {
+  final bool isConnected;
+  final bool isTalking;
+
+  const GlobeVisualizer({super.key, required this.isConnected, required this.isTalking});
+
+  @override
+  State<GlobeVisualizer> createState() => _GlobeVisualizerState();
+}
+
+class _GlobeVisualizerState extends State<GlobeVisualizer> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  final List<Point3D> _points = [];
+  final int _pointCount = 400; // Quantidade de partículas
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 10))..repeat();
+    _generateSphere();
+  }
+
+  void _generateSphere() {
+    for (int i = 0; i < _pointCount; i++) {
+      // Distribuição Fibonacci na esfera
+      double y = 1 - (i / (_pointCount - 1)) * 2;
+      double radius = sqrt(1 - y * y);
+      double theta = 2.39996323 * i; // Golden Angle
+
+      double x = cos(theta) * radius;
+      double z = sin(theta) * radius;
+      _points.add(Point3D(x, y, z));
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return CustomPaint(
+          size: const Size(300, 300),
+          painter: GlobePainter(
+            points: _points,
+            rotation: _controller.value * 2 * pi,
+            isConnected: widget.isConnected,
+            isTalking: widget.isTalking,
+          ),
+        );
+      },
+    );
+  }
+}
+
+class Point3D {
+  double x, y, z;
+  Point3D(this.x, this.y, this.z);
+}
+
+class GlobePainter extends CustomPainter {
+  final List<Point3D> points;
+  final double rotation;
+  final bool isConnected;
+  final bool isTalking;
+
+  GlobePainter({required this.points, required this.rotation, required this.isConnected, required this.isTalking});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final paint = Paint()..strokeCap = StrokeCap.round;
+
+    double radius = size.width / 3;
+    if (isTalking) radius *= 1.2 + (sin(rotation * 10) * 0.05); // Pulsação ao falar
+
+    // Cor Base
+    Color baseColor = isConnected ? Colors.cyanAccent : Colors.redAccent;
+    if (isTalking) baseColor = Colors.cyan;
+
+    // Rotação Y
+    double cosR = cos(rotation);
+    double sinR = sin(rotation);
+
+    for (var point in points) {
+      // Rotação em Y
+      double x = point.x * cosR - point.z * sinR;
+      double z = point.z * cosR + point.x * sinR;
+      double y = point.y;
+
+      // Rotação lenta em X para dar tridimensionalidade extra
+      double tilt = 0.3;
+      double yRot = y * cos(tilt) - z * sin(tilt);
+      z = z * cos(tilt) + y * sin(tilt);
+      y = yRot;
+
+      // Projeção Perspectiva
+      double zScale = 1 / (2 - z); // Fator de profundidade
+      double pX = x * zScale * radius;
+      double pY = y * zScale * radius;
+
+      // Desenhar Ponto
+      double opacity = ((z + 1) / 2).clamp(0.1, 1.0); // Pontos de trás mais escuros
+      paint.color = baseColor.withOpacity(opacity * (isConnected ? 0.8 : 0.3));
+      
+      double dotSize = isTalking ? 3.0 : 2.0;
+      canvas.drawCircle(center + Offset(pX, pY), dotSize * zScale, paint);
+    }
+    
+    // Núcleo Brilhante
+    if (isConnected) {
+        paint.color = baseColor.withOpacity(0.1);
+        paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
+        canvas.drawCircle(center, radius * 0.8, paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant GlobePainter oldDelegate) => true;
 }

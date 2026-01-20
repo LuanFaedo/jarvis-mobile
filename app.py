@@ -1,3 +1,11 @@
+import os
+import sys
+
+# --- PRIORIZAR DIRETÓRIO LOCAL ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+if BASE_DIR not in sys.path:
+    sys.path.insert(0, BASE_DIR)
+
 from flask import Flask, render_template, send_from_directory, request, jsonify, session, redirect, url_for, flash
 from flask_cors import CORS
 from flask_socketio import SocketIO, emit
@@ -16,6 +24,7 @@ import uuid
 import re
 import subprocess
 import shutil
+import sqlite3
 import speech_recognition as sr
 from pydub import AudioSegment
 import io
@@ -29,6 +38,15 @@ from PIL import Image, ImageGrab, ImageOps, ImageEnhance
 import mimetypes
 import pytesseract
 import hashlib
+from difflib import SequenceMatcher
+
+# Tenta importar FPDF para geração de relatórios
+try:
+    from fpdf import FPDF
+    PDF_AVAILABLE = True
+except ImportError:
+    PDF_AVAILABLE = False
+    print("[AVISO] Biblioteca FPDF não instalada. Funcionalidade de PDF desativada.")
 
 # GLOBAIS
 try:
@@ -40,12 +58,12 @@ LAST_USER_INPUT = {"text": "", "time": 0}
 LAST_PROCESSED_TEXT = ""
 LAST_PROCESSED_TIME = 0
 LAST_RESPONSE_HASH = {"text": "", "time": 0}
+LAST_BOT_RESPONSE = "" # Armazena a última fala para evitar auto-escuta
 
 # --- LOCK GLOBAL ANTI-CRASH (CONCORRÊNCIA) ---
-import threading
 COMMAND_LOCK = threading.Lock()
 LAST_COMMAND_TIME = 0
-COMMAND_COOLDOWN = 3.0  # Segundos de cooldown entre comandos
+COMMAND_COOLDOWN = 3.0
 
 # --- Configurações Iniciais ---
 if getattr(sys, 'frozen', False):
@@ -56,38 +74,34 @@ else:
 os.environ['OMP_THREAD_LIMIT'] = '1'
 os.environ['TESSDATA_PREFIX'] = os.path.join(BASE_DIR, "tessdata")
 
-CAMINHO_TESSERACT = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-if os.path.exists(CAMINHO_TESSERACT):
-    pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT
+# Tesseract
+CAMINHO_TESSERACT_PADRAO = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+if os.path.exists(CAMINHO_TESSERACT_PADRAO):
+    pytesseract.pytesseract.tesseract_cmd = CAMINHO_TESSERACT_PADRAO
+else:
+    tess_path = shutil.which("tesseract")
+    if tess_path:
+        pytesseract.pytesseract.tesseract_cmd = tess_path
 
-# Importa o módulo de memória SQLite com tratamento de erro
+# Importa o módulo de memória SQLite
 try:
     from memoria.db_memoria import (
-        get_ou_criar_usuario,
-        atualizar_resumo,
-        atualizar_nome_preferido,
-        adicionar_mensagem,
-        get_ultimas_mensagens,
-        contar_mensagens,
-        get_mensagens_para_resumir,
-        limpar_mensagens_antigas,
-        salvar_fato,
-        get_fatos,
-        get_saldo,
-        atualizar_saldo,
-        adicionar_transacao,
-        get_transacoes,
-        limpar_memoria_usuario,
-        salvar_diario_voz
+        get_ou_criar_usuario, atualizar_resumo, atualizar_nome_preferido,
+        adicionar_mensagem, get_ultimas_mensagens, contar_mensagens,
+        get_mensagens_para_resumir, limpar_mensagens_antigas,
+        salvar_fato, get_fatos,
+        get_saldo, atualizar_saldo, adicionar_transacao, get_transacoes,
+        limpar_memoria_usuario, salvar_diario_voz,
+        definir_meta, get_metas, criar_objetivo, atualizar_objetivo, get_objetivos,
+        adicionar_assinatura, get_assinaturas, remover_assinatura
     )
     print("[SISTEMA] Memória SQLite carregada com sucesso.")
 except ImportError as e:
     print(f"[AVISO] Algumas funções de memória não foram encontradas: {e}")
-    # Fallbacks vazios para não quebrar o código
+    # Fallbacks básicos
     def adicionar_mensagem(*args, **kwargs): pass
     def get_ultimas_mensagens(*args, **kwargs): return []
     def salvar_diario_voz(*args, **kwargs): pass
-    # ... outros se necessário
 
 from iot.tv_controller import TVController
 from sistema.automacao import pc
@@ -96,11 +110,10 @@ from sistema.core import ManipuladorTotal
 
 manipulador = ManipuladorTotal(BASE_DIR)
 
-import requests
-
+# API
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:11434/v1")
 API_KEY = "AAAAC3NzaC1lZDI1NTE5AAAAIJ9KfyhZeNo5E84kORaqKYu7gxopcvqT2hRabwJU/sXF"
-MODELO_ATIVO = "gpt-oss:120b-cloud" # API Externa (NÃO ALTERAR)
+MODELO_ATIVO = "gpt-oss:120b-cloud"
 
 client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 client_ollama = ollama.Client(host=API_BASE_URL.replace("/v1", ""))
@@ -123,6 +136,7 @@ def consultar_gemini_nuvem(prompt):
 
 AUDIO_DIR = os.path.join(BASE_DIR, "audios")
 HISTORY_DIR = os.path.join(BASE_DIR, "historico")
+STATIC_DIR = os.path.join(BASE_DIR, "static") # Ajustado para PDF
 KNOWLEDGE_FILE = os.path.join(BASE_DIR, "memoria/conhecimento.json")
 CONFIG_FILE = os.path.join(BASE_DIR, "memoria/config_jarvis.json")
 
@@ -135,16 +149,21 @@ MAX_AUDIO_CHARS = 1500
 chats_ativos = {}
 lock_chats = threading.Lock()
 
-for folder in [AUDIO_DIR, HISTORY_DIR]:
+for folder in [AUDIO_DIR, HISTORY_DIR, STATIC_DIR]:
     if not os.path.exists(folder): os.makedirs(folder)
 
 app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, "templates"),
-            static_folder=os.path.join(BASE_DIR, "static"),
+            static_folder=STATIC_DIR,
             static_url_path='/static')
 app.secret_key = 'jarvis_v11_ultra'
 CORS(app, resources={r"/*": {"origins": "*"}})
 socketio = SocketIO(app, async_mode='threading', cors_allowed_origins="*")
+
+# --- Helper de Impressão Segura ---
+def safe_print(text):
+    try: print(text)
+    except: pass
 
 def obter_horario_mundial(local="brasil"):
     fusos = {
@@ -243,19 +262,210 @@ def processar_memoria(user_id: str):
         msgs_para_resumir = get_mensagens_para_resumir(user_id, 0, total_msgs - BUFFER_SIZE)
         if msgs_para_resumir: limpar_mensagens_antigas(user_id, BUFFER_SIZE)
 
+# --- SISTEMA FINANCEIRO AVANÇADO (V12) ---
 def processar_financas(user_id, texto):
     texto_lower = texto.lower()
-    if any(p in texto_lower for p in ["atualize", "edite", "mude", "altere", "corrija"]): return None     
+
+    # === METAS ===
+    if "definir meta" in texto_lower or "criar meta" in texto_lower:
+        match_valor = re.search(r'(?:R$|r$|\$)?\s?(\d+(?:[.,]\d+)?)', texto)
+        categoria = ""
+        match_para = re.search(r'para\s+([a-zA-Zçãõáéíóú\s]+)', texto_lower)
+        if match_para: categoria = match_para.group(1).strip().split()[0].title()
+        if not categoria:
+            match_de = re.search(r'meta (?:de|em)\s+([a-zA-Zçãõáéíóú]+)', texto_lower)
+            if match_de: categoria = match_de.group(1).title()
+
+        if match_valor and categoria:
+            valor = float(match_valor.group(1).replace(',', '.'))
+            definir_meta(user_id, categoria, valor)
+            return f"✅ Meta de **{categoria}** definida: R$ {valor:.2f} /mês."
+
+    # === OBJETIVOS ===
+    if "novo objetivo" in texto_lower or "criar objetivo" in texto_lower or "criar cofrinho" in texto_lower:
+        match_valor = re.search(r'(?:valor|de|meta)\s?(?:R$|r$|\$)?\s?(\d+(?:[.,]\d+)?)', texto_lower)
+        try:
+            palavras_chave = ["objetivo", "cofrinho", "meta"]
+            inicio = -1
+            for p in palavras_chave:
+                idx = texto_lower.find(p)
+                if idx != -1:
+                    inicio = idx + len(p); break
+            
+            if inicio != -1:
+                fim = texto_lower.find("valor")
+                if fim == -1: fim = len(texto_lower)
+                nome = texto[inicio:fim].strip().title().replace("De", "").replace("Para", "").strip()
+                if match_valor and nome:
+                    valor = float(match_valor.group(1).replace(',', '.'))
+                    criar_objetivo(user_id, nome, valor)
+                    return f"🆕 Novo Objetivo Criado: **{nome}** (Alvo: R$ {valor:.2f})."
+        except: pass
+
+    # === VISUALIZAÇÃO ===
+    if "ver metas" in texto_lower or "minhas metas" in texto_lower:
+        metas = get_metas(user_id)
+        if not metas: return "Você ainda não definiu metas."
+        res = "📊 **Suas Metas:**\n"
+        for m in metas: res += f"- {m['categoria']}: R$ {m['valor_limite']:.2f}\n"
+        return res
+
+    if "ver objetivos" in texto_lower or "meus objetivos" in texto_lower:
+        objs = get_objetivos(user_id)
+        if not objs: return "Você não tem objetivos."
+        res = "🆕 **Seus Objetivos:**\n"
+        for o in objs:
+            perc = (o['valor_atual'] / o['valor_alvo']) * 100 if o['valor_alvo'] > 0 else 0
+            res += f"- {o['nome']}: R$ {o['valor_atual']:.2f} / {o['valor_alvo']:.2f} ({perc:.1f}%)\n"
+        return res
+
+    # === ASSINATURAS ===
+    if "assinatura" in texto_lower or "conta fixa" in texto_lower:
+        if any(x in texto_lower for x in ["remover", "cancelar", "apagar"]):
+            return "SISTEMA: Função de remover assinatura ainda em desenvolvimento."
+        
+        match_valor = re.search(r'(?:R$|r$|\$)?\s?(\d+(?:[.,]\d+)?)', texto)
+        match_dia = re.search(r'dia\s+(\d{1,2})', texto_lower)
+        
+        try:
+            inicio = texto_lower.find("assinatura") + 10
+            fim = len(texto_lower)
+            if match_valor and match_valor.start() > inicio: fim = min(fim, match_valor.start())
+            if match_dia and match_dia.start() > inicio: fim = min(fim, match_dia.start())
+            nome = texto[inicio:fim].strip().title().replace("De", "").replace("Da", "").strip()
+            
+            if match_valor and match_dia and nome:
+                valor = float(match_valor.group(1).replace(',', '.'))
+                dia = int(match_dia.group(1))
+                adicionar_assinatura(user_id, nome, valor, dia)
+                return f"📅 Assinatura Registrada: **{nome}** (R$ {valor:.2f}, Dia {dia})."
+        except: pass
+
+    # === REMOÇÃO DE TRANSAÇÃO ===
+    termos_remocao = ["apagar", "apague", "remover", "remova", "excluir", "exclua", "deletar"]
+    if any(t in texto_lower for t in termos_remocao):
+        valor_match = re.search(r'(?:R$|r$|\$)\s?(\d+(?:[.,]\d+)?)', texto)
+        conn = sqlite3.connect(os.path.join("memoria", "jarvis_memoria.db"))
+        cursor = conn.cursor()
+        deleted_count = 0
+        if valor_match:
+            valor = float(valor_match.group(1).replace(',', '.'))
+            cursor.execute("DELETE FROM financeiro WHERE user_id = ? AND valor BETWEEN ? AND ?", (user_id, valor - 0.1, valor + 0.1))
+            deleted_count = cursor.rowcount
+        conn.commit()
+        # Recalcula
+        cursor.execute("SELECT SUM(CASE WHEN tipo='entrada' THEN valor ELSE -valor END) FROM financeiro WHERE user_id = ?", (user_id,))
+        res = cursor.fetchone()
+        novo_saldo = res[0] if res[0] else 0.0
+        cursor.execute("UPDATE saldo SET valor = ?, atualizado_em = ? WHERE user_id = ?", (novo_saldo, datetime.now(), user_id))
+        conn.commit(); conn.close()
+        if deleted_count > 0: return f"SISTEMA: {deleted_count} transação(ões) removida(s). Novo Saldo: R$ {novo_saldo:.2f}"
+
+    # === TRANSAÇÃO PADRÃO ===
+    if any(p in texto_lower for p in ["atualize", "edite", "mude", "altere", "corrija", "formato"]): return None
     valor_match = re.search(r'(?:R$|r$|$)\s?(\d+(?:[.,]\d+)?)', texto)
     if not valor_match: return None
+    
     valor = float(valor_match.group(1).replace(',', '.'))
     tipo = "saida"
-    if any(w in texto_lower for w in ["recebi", "ganhei", "entrada", "depósito"]): tipo = "entrada"      
+    if any(w in texto_lower for w in ["recebi", "ganhei", "entrada", "depósito", "salário"]): tipo = "entrada"
+    
+    # Check duplicação (5min)
+    conn = sqlite3.connect(os.path.join("memoria", "jarvis_memoria.db"))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM financeiro WHERE user_id = ? AND valor = ? AND tipo = ? AND criado_em > datetime('now', '-5 minutes')", (user_id, valor, tipo))
+    if cursor.fetchone():
+        conn.close()
+        return f"SISTEMA: Transação de R$ {valor:.2f} ignorada (duplicada)."
+    conn.close()
+
     saldo_atual = get_saldo(user_id)
     novo_saldo = saldo_atual + valor if tipo == "entrada" else saldo_atual - valor
     atualizar_saldo(user_id, novo_saldo)
     adicionar_transacao(user_id, tipo, valor, texto[:50])
     return f"SISTEMA: {tipo.capitalize()} de R$ {valor:.2f} registrada. Saldo: R$ {novo_saldo:.2f}"
+
+# --- PDF GENERATOR ---
+def limpar_pdfs_antigos(manter_ultimos=5):
+    try:
+        pdf_dir = STATIC_DIR
+        pdfs = [f for f in os.listdir(pdf_dir) if f.startswith("Extrato_") and f.endswith(".pdf")]
+        if len(pdfs) > manter_ultimos:
+            pdfs_com_data = [(f, os.path.getmtime(os.path.join(pdf_dir, f))) for f in pdfs]
+            pdfs_ordenados = sorted(pdfs_com_data, key=lambda x: x[1], reverse=True)
+            for pdf_antigo, _ in pdfs_ordenados[manter_ultimos:]:
+                try: os.remove(os.path.join(pdf_dir, pdf_antigo))
+                except: pass
+    except: pass
+
+def gerar_pdf_financeiro(user_id):
+    print(f"[PDF] Iniciando geração para {user_id}...")
+    if not PDF_AVAILABLE: return None
+    limpar_pdfs_antigos(10)
+
+    try:
+        transacoes = get_transacoes(user_id, limite=100)
+        # Categorização simples para V12 Mobile
+        cc_itens = []
+        total_cc = 0
+        
+        transacoes_cronologicas = sorted(transacoes, key=lambda x: x['criado_em'])
+        for t in transacoes_cronologicas:
+            desc = str(t.get('descricao', 'Sem descrição')).encode('latin-1', 'replace').decode('latin-1')
+            tipo = str(t.get('tipo', 'saida')).lower()
+            valor = float(t.get('valor', 0.0))
+            raw_date = t.get('criado_em', '')
+            if hasattr(raw_date, 'strftime'): data_str = raw_date.strftime("%d/%m")
+            else: data_str = str(raw_date)[8:10] + "/" + str(raw_date)[5:7]
+            
+            item = {"data": data_str, "desc": desc, "valor": valor, "tipo": tipo}
+            cc_itens.append(item)
+            if tipo == 'entrada': total_cc += valor
+            else: total_cc -= valor
+
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_fill_color(0, 0, 0)
+        pdf.rect(0, 0, 210, 40, 'F')
+        pdf.set_font("Arial", 'B', 18)
+        pdf.set_text_color(0, 255, 234)
+        pdf.set_xy(10, 10)
+        pdf.cell(190, 10, txt="RELATÓRIO FINANCEIRO JARVIS", ln=True, align='C')
+        
+        pdf.set_font("Arial", 'I', 11)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_xy(10, 22)
+        pdf.cell(190, 8, txt="Resumo Mobile", ln=True, align='C')
+        pdf.ln(20)
+
+        # Tabela
+        pdf.set_text_color(0, 0, 0)
+        pdf.set_font("Arial", 'B', 10)
+        pdf.cell(30, 8, "DATA", 1, 0, 'C')
+        pdf.cell(110, 8, "DESCRIÇÃO", 1, 0, 'L')
+        pdf.cell(50, 8, "VALOR", 1, 1, 'C')
+        
+        pdf.set_font("Arial", size=10)
+        for it in cc_itens:
+            pdf.cell(30, 8, it['data'], 1, 0, 'C')
+            pdf.cell(110, 8, it['desc'], 1, 0, 'L')
+            if it['tipo'] == 'entrada': pdf.set_text_color(0, 150, 0)
+            else: pdf.set_text_color(180, 0, 0)
+            pdf.cell(50, 8, f"R$ {it['valor']:.2f}", 1, 1, 'C')
+            pdf.set_text_color(0, 0, 0)
+
+        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 14)
+        pdf.cell(190, 10, f"SALDO ATUAL: R$ {total_cc:,.2f}", 0, 1, 'C')
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"Extrato_{timestamp}.pdf"
+        filepath = os.path.join(STATIC_DIR, filename)
+        pdf.output(filepath)
+        return filename
+    except Exception as e:
+        print(f"[PDF] Erro: {e}")
+        return None
 
 def processar_comando_iot(user_id, texto):
     if not TVController: return None
@@ -367,8 +577,18 @@ RETORNE APENAS O COMANDO CORRIGIDO no formato [[CMD: ...]]."""
 
 def gerar_resposta_jarvis(user_id, texto):
     if len(texto) > MAX_CHAR_INPUT: texto = texto[:MAX_CHAR_INPUT] + "..."
-    info_iot = processar_comando_iot(user_id, texto)
-    info_financeira = processar_financas(user_id, texto) 
+    
+    try:
+        info_iot = processar_comando_iot(user_id, texto)
+    except Exception as e:
+        print(f"[ERRO IOT] {e}")
+        info_iot = None
+
+    try:
+        info_financeira = processar_financas(user_id, texto)
+    except Exception as e:
+        print(f"[ERRO FINANCAS] {e}")
+        info_financeira = None
 
     usuario = get_ou_criar_usuario(user_id)
     buffer_msgs = get_ultimas_mensagens(user_id, BUFFER_SIZE)
@@ -386,8 +606,7 @@ def gerar_resposta_jarvis(user_id, texto):
 
     nome_usuario = usuario.get('nome_preferido') or f"Usuário {str(user_id)[-4:]}"
     agora_br = (datetime.now(timezone.utc) + OFFSET_TEMPORAL).astimezone(timezone(timedelta(hours=-3)))   
-    total_chats_ativos = len([c for c in chats_ativos.values() if c.get("processando", False)])
-
+    
     system_prompt = f"""VOCÊ É J.A.R.V.I.S., UMA IA ASSISTENTE LEAL, ESPIRITUOSA E EFICIENTE.
 DATA: {agora_br.strftime('%d/%m/%Y %H:%M')}. USUÁRIO MESTRE: {nome_usuario}.
 
@@ -397,10 +616,9 @@ DATA: {agora_br.strftime('%d/%m/%Y %H:%M')}. USUÁRIO MESTRE: {nome_usuario}.
 3. Se o usuário perguntar "o que eu disse?", responda com precisão usando o histórico.
 4. Respostas curtas e diretas são melhores para chat por voz.
 
-=== COMANDOS ===
-- [[SEARCH: query]] -> Busca na internet.
-- [[AUTO: comando | arg]] -> Automação PC.
-- [[CMD: comando]] -> Terminal.
+=== FINANÇAS (V12) ===
+- Você tem acesso total ao banco de dados.
+- Se o usuário pedir PDF/Relatório: Responda "Gerando seu relatório agora..." para ativar a trigger.
 
 CONTEXTO:
 {usuario['resumo_conversa']}
@@ -413,82 +631,53 @@ CONTEXTO:
     msgs = [{"role": "system", "content": system_prompt}] + [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + [{"role": "user", "content": texto}]
     texto_lower = texto.lower()
 
+    # --- Visão e Arquivos (Simplificado) ---
     descricao_visual = ""
     imagem_b64 = None
-    modo_leitura_texto = any(k in texto_lower for k in ["ler texto", "leia o texto", "extrair texto", "copiar texto", "o que está escrito"])
-
-    if any(k in texto_lower for k in ["veja minha tela", "olhe minha tela", "o que está na tela", "leia a tela", "analise a tela"]) or (modo_leitura_texto and "tela" in texto_lower):
-        print(f"[VISAO] Capturando tela (Modo Texto: {modo_leitura_texto})...", flush=True)
-        if modo_leitura_texto:
-            screenshot = ImageGrab.grab()
-            resultado_ocr = extrair_texto_ocr(screenshot)
-            descricao_visual = f"\n[SISTEMA OCR]: O usuário pediu para ler o texto da tela.\n{resultado_ocr}"
-        else:
-            imagem_b64 = capturar_tela_base64()
-            if imagem_b64: descricao_visual = f"\n[SISTEMA VISUAL]: Descrição da tela: {analisar_imagem(imagem_b64)}"
-
-    match_arq = re.search(r'([a-zA-Z]:\\(?:[^:<>"|?*]+)\.(?:png|jpg|jpeg|bmp|webp))', texto, re.IGNORECASE)
-    if match_arq:
-        caminho_img = match_arq.group(1)
-        if os.path.exists(caminho_img):
-            print(f"[VISAO] Processando arquivo: {caminho_img}", flush=True)
-            if modo_leitura_texto:
-                resultado_ocr = extrair_texto_ocr(caminho_img)
-                descricao_visual += f"\n[SISTEMA OCR]: Texto extraído do arquivo '{caminho_img}':\n{resultado_ocr}"
-            else:
-                imagem_b64 = ler_imagem_local_base64(caminho_img)
-                if imagem_b64: descricao_visual += f"\n[SISTEMA VISUAL]: Análise da imagem '{caminho_img}': {analisar_imagem(imagem_b64)}"
-
+    if any(k in texto_lower for k in ["ler tela", "o que está na tela"]):
+        imagem_b64 = capturar_tela_base64()
+        if imagem_b64: descricao_visual = f"\n[SISTEMA VISUAL]: Descrição da tela: {analisar_imagem(imagem_b64)}"
     if descricao_visual: texto += descricao_visual
 
+    # --- Resposta Horário ---
     local_horario = detectar_pergunta_horario(texto)
     if local_horario:
         info = obter_horario_mundial(local_horario)
         try:
             h_str, m_str = info['horario'].split(':')
-            h, m = int(h_str), int(m_str)
+            h = int(h_str)
+            m = int(m_str)
             lbl_h = "hora" if h == 1 else "horas"
             lbl_m = "minuto" if m == 1 else "minutos"
             msg_voz = f"{h} {lbl_h}"
-            if m > 0: msg_voz += f" e {m} {lbl_m}"
-            resposta_horario = f"Agora são {msg_voz} em {info['local']}."
-        except: resposta_horario = f"Agora são {info['completo']}."
-
-        if "brasil" in texto_lower and "portugal" in texto_lower:
-            br = obter_horario_mundial("brasil")
-            pt = obter_horario_mundial("portugal")
-            resposta_horario = f"Brasil: {br['horario']} ({br['offset']})\nPortugal: {pt['horario']} ({pt['offset']})\nDiferença: 3 horas."
-
+            if m > 0:
+                msg_voz += f" e {m} {lbl_m}"
+            res = f"São {msg_voz}."
+        except:
+            res = f"Agora são {info['horario']}."
+            
         adicionar_mensagem(user_id, "user", texto)
-        adicionar_mensagem(user_id, "assistant", resposta_horario)
-        return resposta_horario
+        adicionar_mensagem(user_id, "assistant", res)
+        return {"text": res, "pdf": None}
 
-    if any(k in texto_lower for k in ["espelhar celular", "espelhar tela", "abrir scrcpy", "tela do celular", "ver celular"]):
-        threading.Thread(target=lambda: subprocess.Popen(os.path.join("scripts", "ESPELHAR_CELULAR.bat"), shell=True)).start()
-        return "SISTEMA: Iniciando protocolo de espelhamento Android (SCRCPY)..."
+    # --- IOT Return ---
+    if "tv" in texto_lower and info_iot:
+         return {"text": info_iot, "pdf": None}
 
-    if any(k in texto_lower for k in ["limpar memoria", "limpar ram", "otimizar sistema"]):
-        return f"SISTEMA: {manipulador.executar_comando_terminal('echo Limpeza solicitada...')}"
-
-    if "tv" in texto_lower and any(k in texto_lower for k in ["ligar", "desligar", "volume", "mudo", "canal"]):
-        res_iot = processar_comando_iot(user_id, texto)
-        if res_iot: return res_iot
-
-    MAX_CONTEXT_CHARS = 50000 
-    total_chars = len(system_prompt) + len(texto) + sum(len(m['content']) for m in buffer_msgs)
-    if total_chars > MAX_CONTEXT_CHARS:
-        while len(buffer_msgs) > 0 and total_chars > MAX_CONTEXT_CHARS:
-            msg_removida = buffer_msgs.pop(0) 
-            total_chars -= len(msg_removida['content'])
-        if total_chars > MAX_CONTEXT_CHARS:
-            corte = total_chars - MAX_CONTEXT_CHARS + 1000
-            system_prompt = system_prompt[:-corte] + "\n[...CONTEXTO TRUNCADO...]"
-
-    msgs = [{"role": "system", "content": system_prompt}] + [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + [{"role": "user", "content": texto}]
-
+    # --- LLM ---
     try:
         resp = client.chat.completions.create(model=MODELO_ATIVO, messages=msgs)
         res_txt = resp.choices[0].message.content
+        
+        # --- PDF TRIGGER ---
+        pdf_gerado = None
+        user_quer_pdf = any(x in texto_lower for x in ["pdf", "relatório", "extrato"])
+        ia_diz_pdf = any(x in res_txt.lower() for x in ["gerando", "enviando", "segue"]) and "pdf" in res_txt.lower()
+        
+        if user_quer_pdf or ia_diz_pdf:
+            pdf_gerado = gerar_pdf_financeiro(user_id)
+            if pdf_gerado: res_txt += "\n\n📄 [Relatório Anexado]"
+
         if "[[" in res_txt and "]]" in res_txt:
             output_sys = processar_comandos_sistema(res_txt, user_id)
             if output_sys: res_txt += f"\n\n--- SISTEMA ---\n{output_sys}"
@@ -505,8 +694,9 @@ CONTEXTO:
 
         res_txt = re.sub(r'\n[CONTEXTO_BUSCA_INTERNO]:.*?(?=\n|$)', '', res_txt, flags=re.DOTALL)
         res_txt = res_txt.replace("--- SISTEMA ---", "").strip()
-        return res_txt
-    except Exception as e: return f"Erro: {e}"
+        
+        return {"text": res_txt, "pdf": pdf_gerado}
+    except Exception as e: return {"text": f"Erro: {e}", "pdf": None}
 
 def dividir_texto_para_audio(texto, max_chars=MAX_AUDIO_CHARS):
     if len(texto) <= max_chars: return [texto]
@@ -538,12 +728,12 @@ def gerar_audio_b64(text):
     # --- SANITIZAÇÃO DE ÁUDIO AGRESSIVA ---
     text_limpo = text
     # Remove tags de sistema
-    for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]:"]:
+    for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]"]:
         text_limpo = text_limpo.replace(tag, "")
     
     # Remove Markdown e Códigos
     text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL) 
-    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo)
+    text_limpo = re.sub(r'\[\[.*?\]\]', '', text_limpo)
     
     # Substitui quebras de linha por pausas
     text_limpo = text_limpo.replace("\n", ". ")
@@ -576,10 +766,10 @@ def gerar_audio_b64(text):
 def gerar_multiplos_audios(text):
     if not text or len(text.strip()) == 0: return []
     text_limpo = text
-    for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]:"]:
+    for tag in ["[SISTEMA]", "[CMD]", "SISTEMA:", "Traceback", "Error:", "> Comando", "**RESULTADO DA BUSCA WEB:**", "[CONTEXTO_BUSCA_INTERNO]"]:
         text_limpo = text_limpo.replace(tag, "")
     text_limpo = re.sub(r'```.*?```', '', text_limpo, flags=re.DOTALL)
-    text_limpo = re.sub(r'\[\[.*?\].*?\]\]', '', text_limpo)
+    text_limpo = re.sub(r'\[\[.*?\]\]', '', text_limpo)
     text_limpo = re.sub(r'[^\w\s,.?!çáéíóúãõàêôüÇÁÉÍÓÚÃÕÀÊÔÜ]', '', text_limpo)   
     text_limpo = text_limpo.strip()
 
@@ -594,21 +784,58 @@ def gerar_multiplos_audios(text):
     return audios
 
 def transcrever_audio(base64_data):
-    if not base64_data: return None
+    if not base64_data: 
+        print("[AUDIO] Erro: Dados base64 vazios.")
+        return None
+    
     ffmpeg_path = shutil.which("ffmpeg")
-    if ffmpeg_path: AudioSegment.converter = ffmpeg_path
+    if ffmpeg_path:
+        AudioSegment.converter = ffmpeg_path
+    else:
+        print("[AUDIO] AVISO: FFmpeg não encontrado no PATH. Transcrição pode falhar.")
+
+    temp_p = None
+    temp_wav = None
+    
     try:
         audio_bytes = base64.b64decode(base64_data)
-        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t: t.write(audio_bytes); p = t.name
-        wav = p + ".wav"
-        try: AudioSegment.from_file(p).export(wav, format="wav")
-        except: return "[ERRO AUDIO FORMATO]"
+        # WhatsApp usa OGG/Opus. Vamos salvar como .ogg primeiro.
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as t:
+            t.write(audio_bytes)
+            temp_p = t.name
+        
+        temp_wav = temp_p + ".wav"
+        
+        print(f"[AUDIO] Convertendo {temp_p} para WAV...", flush=True)
+        try:
+            audio = AudioSegment.from_file(temp_p)
+            audio.export(temp_wav, format="wav")
+        except Exception as conv_err:
+            print(f"[AUDIO] Erro na conversão para WAV: {conv_err}")
+            return "[ERRO AUDIO FORMATO]"
+
         r = sr.Recognizer()
-        with sr.AudioFile(wav) as s: texto = r.recognize_google(r.record(s), language="pt-BR")
-        if os.path.exists(p): os.remove(p)
-        if os.path.exists(wav): os.remove(wav)
-        return texto
-    except: return None
+        with sr.AudioFile(temp_wav) as source:
+            print("[AUDIO] Reconhecendo fala (Google API)...", flush=True)
+            audio_data = r.record(source)
+            texto = r.recognize_google(audio_data, language="pt-BR")
+            print(f"[AUDIO] Transcrição Sucesso: '{texto}'")
+            return texto
+    except sr.UnknownValueError:
+        print("[AUDIO] Google não entendeu o áudio (silêncio ou ruído).")
+        return None
+    except sr.RequestError as e:
+        print(f"[AUDIO] Erro no serviço de transcrição: {e}")
+        return None
+    except Exception as e:
+        print(f"[AUDIO] Erro inesperado na transcrição: {e}")
+        return None
+    finally:
+        # Limpeza de arquivos temporários
+        try:
+            if temp_p and os.path.exists(temp_p): os.remove(temp_p)
+            if temp_wav and os.path.exists(temp_wav): os.remove(temp_wav)
+        except: pass
 
 def analisar_imagem(base64_data):
     try:
@@ -656,47 +883,117 @@ def index(): return render_template('index.html')
 
 @app.route('/api/whatsapp', methods=['POST'])
 def api_whatsapp():
-    data = request.json
-    sender = data.get('sender', 'Patrick')
-    texto = data.get('text', '')
-    chat_id = data.get('chat_id', sender) 
+    try:
+        print("\n[WHATSAPP API] --- Nova Requisição ---", flush=True)
+        data = request.json
+        if not data:
+            return jsonify({"error": "No JSON data"}), 400
 
-    with lock_chats:
-        if chat_id not in chats_ativos: chats_ativos[chat_id] = {"processando": True, "fila": [], "resultados": []}
-        else: chats_ativos[chat_id]["processando"] = True
+        sender = data.get('sender', 'Patrick')
+        texto = data.get('text', '')
+        chat_id = data.get('chat_id', sender)
+        
+        print(f"[WHATSAPP API] Sender: {sender} | ChatID: {chat_id}", flush=True)
+        print(f"[WHATSAPP API] Texto Base: '{texto}'", flush=True)
 
-    if data.get('audio_data'):
-        trans = transcrever_audio(data['audio_data'])
-        if trans: texto = f"{texto} {trans}".strip()
+        with lock_chats:
+            if chat_id not in chats_ativos: chats_ativos[chat_id] = {"processando": True, "fila": [], "resultados": []}
+            else: chats_ativos[chat_id]["processando"] = True
 
-    if data.get('image_data'):
-        try:
-            img_bytes = base64.b64decode(data['image_data'])
-            img = Image.open(io.BytesIO(img_bytes))
-            texto_ocr = extrair_texto_ocr(img)
-            if "ERRO" not in texto_ocr:
-                if len(texto_ocr) > 1500: texto_ocr = texto_ocr[:1500] + "\n[...]"
-                texto += f"\n[ANEXO IMAGEM - OCR]: {texto_ocr}\nINSTRUÇÃO: Extraia dados principais."
-            else:
-                desc_visual = analisar_imagem(data['image_data'])
-                texto += f"\n[ANEXO IMAGEM - VISÃO]: {desc_visual}"
-        except: pass
+        if data.get('audio_data'):
+            trans = transcrever_audio(data['audio_data'])
+            if trans: texto = f"{texto} {trans}".strip()
+            else: 
+                 if not texto.strip(): texto = "SISTEMA: Áudio recebido mas não entendido."
 
-    res = gerar_resposta_jarvis(sender, texto)
-    audios = gerar_multiplos_audios(res)
+        if not texto.strip() and not data.get('image_data'):
+             return jsonify({"response": "🔇 Não consegui ouvir nada.", "chat_id": chat_id})
 
-    with lock_chats:
-        if chat_id in chats_ativos:
-            chats_ativos[chat_id]["processando"] = False
-            chats_ativos[chat_id]["resultados"].append({"response": res, "audios": audios, "timestamp": time.time()})
+        if data.get('image_data'):
+            try:
+                img_bytes = base64.b64decode(data['image_data'])
+                img = Image.open(io.BytesIO(img_bytes))
+                texto_ocr = extrair_texto_ocr(img)
+                if "ERRO" not in texto_ocr:
+                    if len(texto_ocr) > 1500: texto_ocr = texto_ocr[:1500] + "\n[...]"
+                    texto += f"\n[ANEXO IMAGEM - OCR]: {texto_ocr}"
+                else:
+                    desc_visual = analisar_imagem(data['image_data'])
+                    texto += f"\n[ANEXO IMAGEM - VISÃO]: {desc_visual}"
+            except Exception as e:
+                print(f"[WHATSAPP API] Erro ao processar imagem: {e}", flush=True)
 
-    return jsonify({"response": res, "audio_response": audios[0]["audio"] if audios else None, "audio_parts": audios, "total_parts": len(audios), "chat_id": chat_id})
+        print(f"[WHATSAPP API] Gerando resposta...", flush=True)
+        
+        # CHAMA BRAIN (Retorna DICT agora)
+        resultado = gerar_resposta_jarvis(sender, texto)
+        
+        # Normaliza resultado
+        if isinstance(resultado, dict):
+            res_txt = resultado.get('text', '...')
+            pdf_anexo = resultado.get('pdf')
+        else:
+            res_txt = str(resultado)
+            pdf_anexo = None
+
+        if not res_txt or not res_txt.strip(): res_txt = "..."
+
+        print(f"[WHATSAPP API] Resposta: {len(res_txt)} chars. PDF: {pdf_anexo}", flush=True)
+        
+        audios = gerar_multiplos_audios(res_txt)
+
+        with lock_chats:
+            if chat_id in chats_ativos:
+                chats_ativos[chat_id]["processando"] = False
+                chats_ativos[chat_id]["resultados"].append({"response": res_txt, "audios": audios, "timestamp": time.time()})
+
+        # JSON Final
+        response_data = {
+            "response": res_txt,
+            "audio_response": audios[0]["audio"] if audios else None,
+            "audio_parts": audios,
+            "total_parts": len(audios),
+            "chat_id": chat_id
+        }
+        
+        # Anexo PDF (Base64)
+        if pdf_anexo:
+            pdf_path = os.path.join(STATIC_DIR, pdf_anexo)
+            if os.path.exists(pdf_path):
+                try:
+                    with open(pdf_path, "rb") as f: response_data["attachment"] = base64.b64encode(f.read()).decode('utf-8')
+                    response_data["attachment_name"] = pdf_anexo
+                except: pass
+
+        return jsonify(response_data)
+    except Exception as e:
+        print(f"[WHATSAPP API] ERRO CRÍTICO: {e}", flush=True)
+        import traceback; traceback.print_exc()
+        return jsonify({"response": "Erro interno no servidor Jarvis.", "error": str(e)}), 500
 
 @socketio.on('fala_usuario')
 def handle_web(data):
-    user_id = data.get('user_id', 'Patrick')
-    res = gerar_resposta_jarvis(user_id, data.get('text'))
-    emit('bot_msg', {'data': res})
+    # Identificação Única de Sessão (Web/Mobile)
+    # Se o cliente mandar user_id, usa. Se não, usa o ID da sessão do socket (único por aba/conexão)
+    user_id = data.get('user_id')
+    if not user_id or user_id == "Patrick":
+        # Prefixo 'web_' para diferenciar visualmente no banco
+        user_id = f"web_{request.sid[:8]}" 
+    
+    print(f"[WEB/SOCKET] Processando mensagem de: {user_id}")
+    
+    resultado = gerar_resposta_jarvis(user_id, data.get('text'))
+    
+    if isinstance(resultado, dict):
+        res_txt = resultado.get('text', '')
+        pdf_anexo = resultado.get('pdf')
+    else:
+        res_txt = str(resultado)
+        pdf_anexo = None
+
+    emit('bot_msg', {'data': res_txt})
+    if pdf_anexo:
+        emit('bot_msg', {'data': f"<a href='/static/{pdf_anexo}' target='_blank'>📄 Baixar Relatório PDF</a>"})
 
 STOPWORDS_PASSIVAS = [
     "sous-titres", "subtitles", "legendas", "amara.org", "comunidade", 
@@ -710,242 +1007,92 @@ def handle_passive_log(data):
     texto = data.get('text', '').strip()
     if not texto or len(texto) < 5: return
     
-    # --- FILTRO ANTI-SPAM GLOBAL (3s) ---
     current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0:
-        print(f"[SPAM PASSIVO] Bloqueado: '{texto}'")
-        return
+    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 3.0: return
     LAST_PROCESSED_TEXT = texto
     LAST_PROCESSED_TIME = current_time
     
     texto_lower = texto.lower()
     if any(sw in texto_lower for sw in STOPWORDS_PASSIVAS): return
-    print(f"[PASSIVE] Memorizando contexto: '{texto}'")
-    
+    print(f"[PASSIVE] Memorizando: '{texto}'")
     threading.Thread(target=adicionar_mensagem, args=(user_id, "user", f"[CONTEXTO AMBIENTE]: {texto}")).start()
 
 def classificar_intencao(texto):
-    """
-    Roteador Semântico: Decide o que fazer antes de fazer.
-    Categorias:
-    - COMANDO: Apenas para ações de HARDWARE/SISTEMA (abrir app, desligar, volume, mouse).
-    - BUSCA: Informações externas, notícias, cotação.
-    - CONVERSA: Horas, Data, Bate-papo, Perguntas gerais, Cálculos.
-    """
     try:
-        prompt_classificador = f"""
-        Classifique a frase do usuário em [COMANDO], [BUSCA] ou [CONVERSA].
-        
-        Regras:
-        - "Que horas são?", "Que dia é hoje?", "Quem é você?" -> [CONVERSA]
-        - "Abra o Google", "Desligue o PC", "Aumente o volume" -> [COMANDO]
-        - "Cotação do dólar", "Notícias de hoje", "Quem ganhou o jogo" -> [BUSCA]
-        
-        Frase: "{texto}"
-        Categoria:"""
-        
         resp = client.chat.completions.create(
             model=MODELO_ATIVO,
-            messages=[{"role": "user", "content": prompt_classificador}],
-            temperature=0.1,
+            messages=[{"role": "user", "content": f"Classifique a frase em [COMANDO], [BUSCA] ou [CONVERSA]. Frase: {texto}"}],
             max_tokens=10
         )
-        
-        categoria = resp.choices[0].message.content.strip().upper()
-        
-        if "COMANDO" in categoria: return "COMANDO"
-        if "BUSCA" in categoria: return "BUSCA"
+        cat = resp.choices[0].message.content.strip().upper()
+        if "COMANDO" in cat: return "COMANDO"
+        if "BUSCA" in cat: return "BUSCA"
         return "CONVERSA"
-        
-    except Exception as e:
-        print(f"[ROTEADOR ERROR] {e}")
-        return "CONVERSA"
+    except: return "CONVERSA"
 
 @socketio.on('active_command')
 def handle_active_command(data):
-    global LAST_USER_INPUT, LAST_COMMAND_TIME
-    
+    global LAST_USER_INPUT, LAST_COMMAND_TIME, LAST_BOT_RESPONSE
     user_id = data.get('user_id', 'Mestre')
     text = data.get('text', '').strip()
-    
     if not text: return
 
-    # Filtros de Duplicidade e Spam
-    tempo_atual = time.time()
-    if text == LAST_USER_INPUT["text"] and (tempo_atual - LAST_USER_INPUT["time"] < 3.0):
-        print(f"[SPAM IGNORADO] '{text}'")
+    # --- 1. Lógica de "Barge-in" (Interrupção) ---
+    texto_lower = text.lower()
+    comandos_parada = ["pare", "parar", "silêncio", "silencio", "stop", "chega", "fique quieto"]
+    
+    # Se disser APENAS "Jarvis", ou comandos de parada
+    if texto_lower == "jarvis" or any(cmd == texto_lower for cmd in comandos_parada) or "jarvis, pare" in texto_lower:
+        print(f"[INTERRUPÇÃO] Comando de parada recebido: {text}")
+        socketio.emit('force_stop_playback', {'user_id': user_id}) # Cliente deve tratar isso parando o player
         return
 
+    # --- 2. Cancelamento de Eco (Auto-escuta) ---
+    if LAST_BOT_RESPONSE:
+        ratio = SequenceMatcher(None, texto_lower, LAST_BOT_RESPONSE.lower()).ratio()
+        if ratio > 0.85: # 85% de similaridade
+            print(f"[ECO DETECTADO] Ignorando entrada (Similaridade: {ratio:.2f}): '{text}'")
+            return
+        # Verifica se o texto ouvido está contido na última resposta (comum em ecos parciais)
+        if len(text) > 15 and text.lower() in LAST_BOT_RESPONSE.lower():
+             print(f"[ECO PARCIAL] Ignorando entrada contida na resposta anterior: '{text}'")
+             return
+
+    tempo_atual = time.time()
+    if text == LAST_USER_INPUT["text"] and (tempo_atual - LAST_USER_INPUT["time"] < 3.0): return
     LAST_USER_INPUT = {"text": text, "time": tempo_atual}
     print(f"\n[COMANDO RECEBIDO] {user_id}: {text}")
 
-    # Memória
     try: adicionar_mensagem(user_id, "user", text)
     except: pass
 
-    # Roteamento
-    socketio.emit('status_update', {'status': 'ANALISANDO INTENÇÃO...'})
-    intencao = classificar_intencao(text)
-    print(f"[ROTEADOR] Intenção detectada: {intencao}")
-    socketio.emit('intent_detected', {'intent': intencao})
-
-    resposta_final = ""
+    socketio.emit('status_update', {'status': 'PROCESSANDO...'})
     
-    # Execução
-    if intencao == "COMANDO":
-        socketio.emit('status_update', {'status': 'PROCESSANDO AÇÃO...'})
-        # Prompt Híbrido: Ação + Fala
-        prompt_sistema = f"""
-        O usuário solicitou uma ação de sistema: "{text}".
-        1. Identifique qual ação executar (abrir, fechar, volume, etc).
-        2. Responda APENAS com uma frase curta e natural confirmando que vai fazer (ex: "Abrindo o navegador agora", "Aumentando o volume").
-        Não gere código ou JSON aqui, apenas a resposta falada.
-        """
-        resposta_final = gerar_resposta_llm(user_id, prompt_sistema, usar_memoria=False)
-        
-        # Dispara a automação real em background (via thread separada para não travar a fala)
-        socketio.start_background_task(processar_automacao_silenciosa, text)
-        
-    elif intencao == "BUSCA":
-        socketio.emit('status_update', {'status': 'PESQUISANDO NA WEB...'})
-        resumo_busca = pesquisar_web(text)
-        prompt_busca = f"Baseado nesta pesquisa: '{resumo_busca}', responda à pergunta do usuário: '{text}'. Seja direto e falado."
-        resposta_final = gerar_resposta_llm(user_id, prompt_busca)
-        
-    else: # CONVERSA
-        socketio.emit('status_update', {'status': 'PENSANDO...'})
-        if "hora" in text.lower():
-            hora_atual = datetime.now().strftime("%H:%M")
-            prompt_extra = f" (Dica de contexto: Agora são {hora_atual})"
-            resposta_final = gerar_resposta_llm(user_id, text + prompt_extra, usar_memoria=True)
-        else:
-            resposta_final = gerar_resposta_llm(user_id, text, usar_memoria=True)
+    # Se o usuário falou algo novo enquanto o bot falava, forçamos parada do áudio anterior também
+    socketio.emit('force_stop_playback', {'user_id': user_id})
 
-    # Envio da Resposta
-    if resposta_final:
-        try: adicionar_mensagem(user_id, "assistant", resposta_final)
+    resultado = gerar_resposta_jarvis(user_id, text)
+    
+    if isinstance(resultado, dict): res_txt = resultado['text']
+    else: res_txt = str(resultado)
+
+    # Atualiza a memória de eco
+    LAST_BOT_RESPONSE = res_txt
+
+    if res_txt:
+        try: adicionar_mensagem(user_id, "assistant", res_txt)
         except: pass
-        
-        # Correção: Usar a função existente gerar_audio_b64 que já retorna o base64
-        audio_b64 = gerar_audio_b64(resposta_final)
-        
-        socketio.emit('bot_response', {
-            'text': resposta_final,
-            'audio': audio_b64, 
-            'continue_conversation': True
-        })
+        audio_b64 = gerar_audio_b64(res_txt)
+        try:
+            socketio.emit('bot_response', {'text': res_txt, 'audio': audio_b64, 'continue_conversation': True})
+        except Exception as e_sock:
+            print(f"[AVISO] Falha ao enviar resposta ao cliente (conexão perdida?): {e_sock}")
 
 def processar_automacao_silenciosa(comando_texto):
-    """Tenta executar o comando no sistema sem gerar fala extra"""
     try:
         from sistema.automacao import automacao_rapida
         automacao_rapida(comando_texto)
-    except Exception as e:
-        print(f"[AUTOMACAO BG] Erro: {e}")
-
-def gerar_resposta_llm(user_id, prompt, usar_memoria=True):
-    # Função auxiliar para centralizar chamada ao LLM
-    # (Lógica original de processamento movida para cá para limpeza)
-    try:
-        contexto = ""
-        if usar_memoria:
-            hist = get_ultimas_mensagens(user_id, 5)
-            contexto = f"Histórico: {hist}\n"
-        
-        full_prompt = f"{contexto}Usuário: {prompt}"
-        
-        resp = client.chat.completions.create(
-            model=MODELO_ATIVO,
-            messages=[
-                {"role": "system", "content": """
-                VOCÊ É O JARVIS. 
-                REGRAS DE RESPOSTA (CRÍTICO):
-                1. MÁXIMO 800 CARACTERES. Seja conciso.
-                2. TEXTO PURO APENAS. Não use Markdown (*, #, _), emojis ou símbolos gráficos.
-                3. Fale como um humano natural, não como um robô lendo uma lista.
-                4. Se for contar uma história, resuma ao essencial.
-                """},
-                {"role": "user", "content": full_prompt}
-            ]
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        print(f"[LLM ERROR] {e}")
-        return "Desculpe, tive um erro neural."
-
-# (MANTENDO O RESTO DO CÓDIGO INALTERADO ONDE POSSÍVEL)
-# ... active_command anterior será substituído ...
-
-def process_active_command_bg(data):
-    """Processa comando em background thread - THREAD-SAFE"""
-    global LAST_RESPONSE_HASH, LAST_PROCESSED_TEXT, LAST_PROCESSED_TIME
-
-    user_id = data.get('user_id', 'Mestre')
-    texto = data.get('text', '').strip()
-
-    if not texto or len(texto) < 2: return
-
-    # --- FILTRO TEXTO DUPLICADO ---
-    current_time = time.time()
-    if texto == LAST_PROCESSED_TEXT and (current_time - LAST_PROCESSED_TIME) < 2.0:
-        return
-    LAST_PROCESSED_TEXT = texto
-    LAST_PROCESSED_TIME = current_time
-
-    print(f"[ACTIVE] Comando recebido: '{texto}'", flush=True)
-
-    # --- LÓGICA DE PARADA (STOP WORDS) ---
-    STOP_WORDS = ["pare", "parar", "silêncio", "chega", "obrigado", "tchau", "dormir", "encerrar"]
-    texto_lower = texto.lower()
-
-    if any(w in texto_lower for w in STOP_WORDS):
-        print("[SESSÃO] Comando de parada detectado.")
-        socketio.start_background_task(_enviar_resposta_com_audio, "Entendido. Standby.", False)
-        return
-
-    # --- LÓGICA DE GATILHO RÁPIDO ---
-    triggers = ["jarvis", "javis", "chaves", "garvis", "assistente", "já vi", "jair"]
-    if texto_lower in triggers:
-        socketio.start_background_task(_enviar_resposta_com_audio, "Pois não?", True)
-        return
-
-    # --- PROCESSAMENTO IA ---
-    resposta = gerar_resposta_jarvis(user_id, texto)
-
-    # Filtro de resposta duplicada
-    resp_hash = hashlib.md5(resposta.encode('utf-8')).hexdigest()
-    if resp_hash == LAST_RESPONSE_HASH["text"] and (current_time - LAST_RESPONSE_HASH["time"]) < 1.0:
-        return
-    LAST_RESPONSE_HASH = {"text": resp_hash, "time": current_time}
-
-    # --- LOOP INFINITO: SEMPRE CONTINUA A MENOS QUE MANDE PARAR ---
-    socketio.start_background_task(_enviar_resposta_com_audio, resposta, True)
-
-def _enviar_resposta_com_audio(resposta, continuar):
-    """Gera e envia áudio em background - evita crash de concorrência"""
-    try:
-        audio_b64 = gerar_audio_b64(resposta)
-        socketio.emit('bot_response', {'text': resposta, 'audio': audio_b64, 'continue_conversation': continuar})
-
-        # Áudio em partes (para respostas longas)
-        audios = gerar_multiplos_audios(resposta)
-        if audios and len(audios) > 1:
-            socketio.emit('audio_parts_start', {'total': len(audios)})
-            for part in audios:
-                socketio.emit('play_audio_remoto', {
-                    'url': f"data:audio/mp3;base64,{part['audio']}",
-                    'parte': part['parte'],
-                    'total': part['total']
-                })
-            socketio.emit('audio_parts_end', {'total': len(audios)})
-    except Exception as e:
-        print(f"[ERRO AUDIO BG] {e}", flush=True)
-        # Mesmo com erro no áudio, envia texto
-        socketio.emit('bot_response', {'text': resposta, 'audio': None, 'continue_conversation': continuar})
-
-@socketio.on('message_text')
-def handle_legacy_message_text(data):
-    handle_web({'text': data.get('data'), 'user_id': 'LegacyUser'})
+    except Exception as e: print(f"[AUTOMACAO BG] Erro: {e}")
 
 # --- Utilitários de Modelo ---
 import requests
@@ -956,7 +1103,7 @@ def get_installed_models():
         if resp.status_code == 200:
             return [m.get('name', '?') for m in resp.json().get('models', [])]
     except: pass
-    return ['qwen2.5-coder:32b', 'gpt-oss:120b-cloud', 'mistral', 'llama3', 'deepseek-r1']
+    return ['gpt-oss:120b-cloud']
 
 @socketio.on('connect') 
 def handle_connect():
@@ -981,7 +1128,7 @@ def gerar_qrcode_conexao(url):
         qr_path = os.path.join(BASE_DIR, "connect_qr.png")
         img.save(qr_path)
         if sys.platform == 'win32': os.startfile(qr_path)
-    except Exception as e: print(f"[QR] Erro: {e}")
+    except: pass
 
 if __name__ == '__main__':
     import logging
@@ -1009,9 +1156,11 @@ if __name__ == '__main__':
         gerar_qrcode_conexao("http://localhost:5000")
 
     def start_zap():
-        zap_path = os.path.join(BASE_DIR, "jarvis-mcp-whatsapp")
-        if os.path.exists(zap_path): subprocess.Popen(f'start cmd /k "cd /d {zap_path} && npm start"', shell=True)
+        print("[SISTEMA] Disparando integração WhatsApp...", flush=True)
+        try:
+            subprocess.Popen(["cmd", "/c", "start", "INICIAR_WHATSAPP.bat"], shell=True, cwd=BASE_DIR)
+        except Exception as e: print(f"[ERRO] Falha Zap: {e}")
 
-    # threading.Thread(target=start_zap, daemon=True).start()
-    print("[SISTEMA] Servidor Online. Aguardando comandos...", flush=True)
+    threading.Thread(target=start_zap, daemon=True).start()
+    print("[SISTEMA] Servidor Online.", flush=True)
     socketio.run(app, debug=False, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True)
