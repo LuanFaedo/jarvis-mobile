@@ -31,6 +31,9 @@ dependencies:
   # Speech-to-Text (Wake Word Detection)
   speech_to_text: ^7.0.0
 
+  # Text-to-Speech (Native Device Voice)
+  flutter_tts: ^3.8.0
+
   # QR Code Scanner para Quick Connect
   mobile_scanner: ^5.1.1
 
@@ -38,6 +41,13 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^2.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_icons:
+  android: "ic_launcher"
+  ios: true
+  image_path: "assets/icon.png"
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true

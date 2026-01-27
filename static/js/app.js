@@ -343,6 +343,13 @@ function toggleMic() {
 
 // --- SOCKET LISTENERS ---
 
+// NOVO: Escuta comando de parada forçada (Barge-in do Servidor)
+socket.on('force_stop_playback', (data) => {
+    console.log("[SERVER] Comando de SILÊNCIO recebido.");
+    handleInterruption();
+    addLog("🔇 Silêncio forçado pelo servidor.");
+});
+
 socket.on('lista_modelos', (data) => {
     modelSelector.innerHTML = "";
     if (data.modelos && data.modelos.length > 0) {
@@ -360,7 +367,14 @@ socket.on('lista_modelos', (data) => {
 socket.on('bot_msg', (data) => {
     isProcessing = false;
     setStatus('ONLINE', 'online');
-    addMsg('assistant', data.data);
+    
+    // Tratamento de Imagem (Meta AI Tag)
+    let texto = data.data;
+    if (texto.includes('[[GEN_IMG:')) {
+        texto = texto.replace(/\[\[GEN_IMG:(.*?)\]\]/g, '<div class="img-generating"><i class="fa-solid fa-palette"></i> Gerando imagem: "$1"...</div>');
+    }
+    
+    addMsg('assistant', texto);
 });
 
 // STREAMING DE TEXTO (Efeito Digitação)

@@ -2,12 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
-import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
@@ -16,7 +15,14 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+  SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle.light);
   runApp(const JarvisApp());
+}
+
+class ChatLog {
+  final String text;
+  final bool isUser;
+  ChatLog(this.text, this.isUser);
 }
 
 class JarvisApp extends StatelessWidget {
@@ -25,53 +31,168 @@ class JarvisApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'J.A.R.V.I.S.',
+      title: 'JARVIS V12',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF000000),
         primaryColor: const Color(0xFF00FFFF),
       ),
-      home: const HUDInterface(),
+      home: const WebLikeInterface(),
     );
   }
 }
 
-class HUDInterface extends StatefulWidget {
-  const HUDInterface({super.key});
+class WebLikeInterface extends StatefulWidget {
+  const WebLikeInterface({super.key});
 
   @override
-  State<HUDInterface> createState() => _HUDInterfaceState();
+  State<WebLikeInterface> createState() => _WebLikeInterfaceState();
 }
 
-class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMixin {
+class _WebLikeInterfaceState extends State<WebLikeInterface> with TickerProviderStateMixin {
   final TextEditingController _urlController = TextEditingController(text: 'http://192.168.3.101:5000');
-  final TextEditingController _messageController = TextEditingController();
+  final TextEditingController _textInputController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
   
   late IO.Socket socket;
-  final AudioPlayer _audioPlayer = AudioPlayer();
+  final FlutterTts _flutterTts = FlutterTts();
   final stt.SpeechToText _speech = stt.SpeechToText();
   
   bool _isConnected = false;
   bool _speechEnabled = false;
-  String _statusText = "INICIALIZANDO...";
-  String _lastTranscript = "";
+  bool _isTalking = false;
+  String _statusText = "AGUARDANDO COMANDO";
   String _lastSentText = "";
-  Timer? _manualSilenceTimer;
   
-  late AnimationController _pulseController;
+  final List<ChatLog> _logs = [];
+  String? _holoImageBase64;
+  
+  // CONFIGURAÇÕES DE ÁUDIO
+  double _speechRate = 0.5; 
+  String _rateLabel = "1.0x";
+  bool _isMuted = false;
+  
+  // VOZES
+  List<dynamic> _voices = [];
+  Map<String, String>? _selectedVoice;
+
+  Timer? _manualSilenceTimer;
+  late AnimationController _particleController;
 
   @override
   void initState() {
     super.initState();
+    _particleController = AnimationController(vsync: this, duration: const Duration(seconds: 20))..repeat();
     
-    _pulseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    )..repeat(reverse: true);
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
-       _loadConfig().then((_) => _initSystem());
+       _loadConfig().then((_) {
+         _initSystem();
+         _initTts();
+       });
     });
+  }
+
+  Future<void> _initTts() async {
+    await _flutterTts.setLanguage("pt-BR");
+    await _flutterTts.setSpeechRate(_speechRate);
+    await _flutterTts.setVolume(_isMuted ? 0.0 : 1.0);
+    await _flutterTts.setPitch(1.0);
+
+    _flutterTts.setStartHandler(() => setState(() => _isTalking = true));
+    _flutterTts.setCompletionHandler(() {
+      setState(() => _isTalking = false);
+      if (_isConnected) _startContinuousListening(); 
+    });
+    _flutterTts.setErrorHandler((msg) => setState(() => _isTalking = false));
+
+    _getVoices();
+  }
+
+  Future<void> _getVoices() async {
+    try {
+      var allVoices = await _flutterTts.getVoices;
+      setState(() {
+        _voices = allVoices.where((v) {
+            String loc = v["locale"].toString().toLowerCase();
+            return loc.contains("pt") || loc.contains("bra") || loc.contains("por");
+        }).toList();
+      });
+      if (_selectedVoice != null) {
+        await _flutterTts.setVoice(_selectedVoice!);
+      }
+    } catch (e) { print("Erro vozes: $e"); }
+  }
+
+  void _toggleMute() {
+      setState(() {
+          _isMuted = !_isMuted;
+          _flutterTts.setVolume(_isMuted ? 0.0 : 1.0);
+          if (_isMuted && _isTalking) _flutterTts.stop();
+      });
+  }
+  
+  void _cycleSpeed() {
+      setState(() {
+          if (_rateLabel == "1.0x") {
+              _speechRate = 0.7; // ~1.25x
+              _rateLabel = "1.25x";
+          } else if (_rateLabel == "1.25x") {
+              _speechRate = 0.9; // ~1.5x
+              _rateLabel = "1.5x";
+          } else {
+              _speechRate = 0.5; // Normal
+              _rateLabel = "1.0x";
+          }
+          _flutterTts.setSpeechRate(_speechRate);
+      });
+  }
+
+  void _changeVoice(Map<dynamic, dynamic> voice) async {
+    await _flutterTts.setVoice({"name": voice["name"], "locale": voice["locale"]});
+    setState(() {
+      _selectedVoice = {"name": voice["name"], "locale": voice["locale"]};
+    });
+    _saveConfig(); 
+    await _flutterTts.stop();
+    await _flutterTts.speak("Voz definida.");
+  }
+
+  void _showVoiceDialog() {
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text("Selecionar Voz", style: TextStyle(color: Colors.cyan)),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: ListView.builder(
+            shrinkWrap: true,
+            itemCount: _voices.length,
+            itemBuilder: (ctx, i) {
+              var v = _voices[i];
+              return ListTile(
+                title: Text(v["name"].toString(), style: TextStyle(fontSize: 14)),
+                subtitle: Text(v["locale"].toString(), style: TextStyle(fontSize: 12, color: Colors.grey)),
+                trailing: _selectedVoice?["name"] == v["name"] ? Icon(Icons.check, color: Colors.cyan) : null,
+                onTap: () {
+                  _changeVoice(v);
+                  Navigator.pop(c);
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _scrollToBottom() {
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        _scrollController.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
   }
 
   Future<void> _loadConfig() async {
@@ -81,377 +202,377 @@ class _HUDInterfaceState extends State<HUDInterface> with TickerProviderStateMix
       if (await file.exists()) {
         final content = await file.readAsString();
         final data = jsonDecode(content);
-        if (data['server_url'] != null) {
-          setState(() => _urlController.text = data['server_url']);
-        }
+        if (data['server_url'] != null) setState(() => _urlController.text = data['server_url']);
+        if (data['voice_name'] != null) _selectedVoice = {"name": data['voice_name'], "locale": data['voice_locale']};
       }
-    } catch (e) { print(e); }
+    } catch (e) {}
   }
 
   Future<void> _saveConfig() async {
     try {
       final dir = await getApplicationDocumentsDirectory();
       final file = File('${dir.path}/config.json');
-      await file.writeAsString(jsonEncode({'server_url': _urlController.text}));
-    } catch (e) { print(e); }
+      Map<String, dynamic> data = {'server_url': _urlController.text};
+      if (_selectedVoice != null) {
+        data['voice_name'] = _selectedVoice!["name"];
+        data['voice_locale'] = _selectedVoice!["locale"];
+      }
+      await file.writeAsString(jsonEncode(data));
+    } catch (e) {}
   }
 
   Future<void> _initSystem() async {
     await [Permission.microphone, Permission.storage, Permission.camera].request();
     _speechEnabled = await _speech.initialize(
       onStatus: _onSpeechStatus,
-      onError: (e) => print('[STT ERROR] ${e.errorMsg}'),
+      onError: (e) => print('[STT] ${e.errorMsg}'),
     );
     _connectToServer();
   }
 
   void _connectToServer() {
     if (_isConnected) { socket.disconnect(); return; }
-    
     setState(() => _statusText = "CONECTANDO...");
     _saveConfig();
 
     try {
-      socket = IO.io(_urlController.text, IO.OptionBuilder()
-          .setTransports(['websocket'])
-          .disableAutoConnect()
-          .build());
-
+      socket = IO.io(_urlController.text, IO.OptionBuilder().setTransports(['websocket']).disableAutoConnect().build());
       socket.connect();
+      
       socket.onConnect((_) {
-        setState(() {
-          _isConnected = true;
-          _statusText = "ONLINE";
-        });
+        setState(() { _isConnected = true; _statusText = "ONLINE"; });
         _startContinuousListening();
       });
 
       socket.onDisconnect((_) => setState(() { _isConnected = false; _statusText = "OFFLINE"; }));
       
       socket.on('bot_response', (data) => _handleServerResponse(data));
-      socket.on('status_update', (data) => setState(() => _statusText = data['status'] ?? _statusText));
-      socket.on('intent_detected', (data) => setState(() => _statusText = "MODO: ${data['intent']}"));
       
-      socket.on('force_stop_playback', (_) async {
-        print("[CLIENT] Comando de parada recebido.");
-        await _audioPlayer.stop();
-        setState(() => _statusText = "SILÊNCIO...");
+      socket.on('bot_image_event', (data) {
+        if (data != null && data['image'] != null) {
+          setState(() {
+            _holoImageBase64 = data['image'];
+            _logs.add(ChatLog(">> Visualização gerada.", false));
+          });
+          _scrollToBottom();
+        }
       });
 
-    } catch (e) {
-      setState(() => _statusText = "ERRO: $e");
-    }
-  }
+      socket.on('force_stop_playback', (_) async {
+        await _flutterTts.stop();
+        setState(() { _statusText = "SILÊNCIO..."; _isTalking = false; });
+      });
 
-  // --- RECONHECIMENTO DE VOZ ---
+      socket.on('status_update', (data) => setState(() => _statusText = data['status']?.toUpperCase() ?? _statusText));
+
+    } catch (e) { setState(() => _statusText = "ERRO: $e"); }
+  }
 
   void _startContinuousListening() async {
     if (!_speechEnabled || !_isConnected || _speech.isListening) return;
-
     try {
       await _speech.listen(
         onResult: (result) {
           String text = result.recognizedWords.trim();
-          if (text.isEmpty) return; // Aceita qualquer tamanho
+          if (text.isEmpty) return;
           
-          setState(() => _lastTranscript = text);
+          if (_isTalking) {
+             String tLower = text.toLowerCase();
+             if (tLower.contains("jarvis") || tLower.contains("pare") || tLower.contains("silêncio")) {
+                 _flutterTts.stop();
+                 _sendCommand("Jarvis, pare");
+             }
+             return; 
+          }
           
           _manualSilenceTimer?.cancel();
-          _manualSilenceTimer = Timer(const Duration(milliseconds: 3000), () {
-             if (text.isNotEmpty && text != _lastSentText) {
-               _sendCommand(text);
-             }
+          _manualSilenceTimer = Timer(const Duration(milliseconds: 2000), () {
+             if (text.isNotEmpty && text != _lastSentText) _sendCommand(text);
           });
         },
         listenFor: const Duration(seconds: 60),
-        pauseFor: const Duration(seconds: 10), // Pausa nativa longa para respeitar o timer manual
+        pauseFor: const Duration(seconds: 3),
         localeId: 'pt_BR',
         cancelOnError: false,
         partialResults: true,
-        onDevice: true, // Força o uso do motor on-device se disponível (mais rápido/estável)
+        onDevice: true,
       );
-    } catch (e) {
-      Future.delayed(const Duration(seconds: 1), _startContinuousListening);
-    }
+    } catch (e) { Future.delayed(const Duration(seconds: 1), _startContinuousListening); }
   }
 
   void _onSpeechStatus(String status) {
     if ((status == 'notListening' || status == 'done') && _isConnected && mounted) {
-      Future.delayed(const Duration(milliseconds: 100), _startContinuousListening);
+      if (!_isTalking) Future.delayed(const Duration(milliseconds: 100), _startContinuousListening);
     }
   }
 
   void _sendCommand(String text) {
     if (!_isConnected) return;
+    if (text.trim().isEmpty) return;
+
     _lastSentText = text;
-    HapticFeedback.mediumImpact(); // Vibra
-    setState(() => _statusText = "ENVIANDO...");
+    HapticFeedback.mediumImpact();
+    _textInputController.clear();
+    
+    if (_isTalking) _flutterTts.stop();
+    
+    setState(() {
+      _statusText = "PROCESSANDO...";
+      _logs.add(ChatLog(text, true));
+      _holoImageBase64 = null; 
+    });
+    _scrollToBottom();
     socket.emit('active_command', {'user_id': 'Mestre', 'text': text});
   }
 
   void _handleServerResponse(dynamic data) async {
     if (data == null) return;
     String text = data['text'] ?? "";
-    String? audio = data['audio'];
+    String displayText = text.replaceAll(RegExp(r'\[\[GEN_IMG:.*?\]\]'), '');
     
     setState(() {
-      _lastTranscript = text;
+      if (displayText.trim().isNotEmpty) _logs.add(ChatLog(displayText, false));
       _statusText = "FALANDO...";
     });
+    _scrollToBottom();
 
-    if (audio != null) {
-      await _speech.stop();
-      final bytes = base64Decode(data['audio'].split(',').last);
-      final dir = await getTemporaryDirectory();
-      final file = File('${dir.path}/resp.mp3');
-      await file.writeAsBytes(bytes);
-      await _audioPlayer.play(DeviceFileSource(file.path));
-      
-      _audioPlayer.onPlayerComplete.first.then((_) {
-         if (mounted) _startContinuousListening();
-      });
+    if (displayText.isNotEmpty) {
+        await _speech.stop();
+        await _flutterTts.speak(displayText);
     }
   }
 
   Future<void> _scanQRCode() async {
     final result = await Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => Scaffold(
-          appBar: AppBar(title: const Text("Escanear QR Code")),
-          body: MobileScanner(
-            onDetect: (capture) {
+      context, MaterialPageRoute(builder: (context) => Scaffold(
+          appBar: AppBar(title: const Text("Escanear QR")),
+          body: MobileScanner(onDetect: (capture) {
               final List<Barcode> barcodes = capture.barcodes;
               for (final barcode in barcodes) {
-                if (barcode.rawValue != null) {
-                  Navigator.pop(context, barcode.rawValue);
-                  break; 
-                }
+                if (barcode.rawValue != null) { Navigator.pop(context, barcode.rawValue); break; }
               }
-            },
-          ),
-        ),
-      ),
+            }),
+        )),
     );
-
     if (result != null) {
-      setState(() {
-        _urlController.text = result;
-      });
+      setState(() => _urlController.text = result);
       _connectToServer();
     }
   }
 
-  // --- UI SIMPLIFICADA (SAFE MODE) ---
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      extendBodyBehindAppBar: true,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: Text("JARVIS V12", style: GoogleFonts.orbitron(color: Colors.cyan)),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text("JARVIS ", style: GoogleFonts.orbitron(color: Colors.white, fontWeight: FontWeight.bold)),
+            Text("V12", style: GoogleFonts.orbitron(color: Colors.cyan)),
+          ],
+        ),
+        centerTitle: true,
         actions: [
+          // MUTE NA TOP BAR
           IconButton(
-            icon: Icon(Icons.qr_code_scanner, color: Colors.cyanAccent),
-            onPressed: _scanQRCode,
+              icon: Icon(_isMuted ? Icons.volume_off : Icons.volume_up, color: _isMuted ? Colors.red : Colors.cyan),
+              onPressed: _toggleMute
           ),
-          IconButton(
-            icon: Icon(Icons.flash_on, color: Colors.yellow), // Teste
-            onPressed: () => _sendCommand("teste de conexão"),
-          ),
-          IconButton(
-            icon: Icon(Icons.settings, color: Colors.cyan),
-            onPressed: () => _showConfigDialog(),
-          )
+          // SELETOR DE VOZ
+          IconButton(icon: Icon(Icons.record_voice_over, color: Colors.cyanAccent), onPressed: _showVoiceDialog),
+          
+          IconButton(icon: Icon(Icons.qr_code_scanner, color: Colors.white54), onPressed: _scanQRCode),
+          IconButton(icon: Icon(Icons.settings, color: Colors.white54), onPressed: () {
+             showDialog(context: context, builder: (c) => AlertDialog(
+                title: Text("Configurar IP"),
+                content: TextField(controller: _urlController),
+                actions: [TextButton(onPressed: _connectToServer, child: Text("Conectar"))]
+             ));
+          })
         ],
       ),
-      body: Column(
+      body: Stack(
         children: [
-          Expanded(
+          Positioned.fill(
+            child: AnimatedBuilder(
+              animation: _particleController,
+              builder: (context, child) => CustomPaint(
+                painter: ParticleBackgroundPainter(time: _particleController.value * 2 * pi, isTalking: _statusText == "FALANDO...")
+              ),
+            ),
+          ),
+
+          Positioned(
+            top: 0, left: 0, right: 0, height: 300,
             child: Center(
-              child: GlobeVisualizer(isConnected: _isConnected, isTalking: _statusText == "FALANDO..."),
+              child: AnimatedBuilder(
+                animation: _particleController,
+                builder: (context, child) => CustomPaint(
+                  size: const Size(200, 200),
+                  painter: GlobePainter(rotation: _particleController.value * 2 * pi, isConnected: _isConnected, isTalking: _statusText == "FALANDO..."),
+                ),
+              ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.all(20),
-            child: Text(
-              _lastTranscript,
-              textAlign: TextAlign.center,
-              style: GoogleFonts.robotoMono(fontSize: 18, color: Colors.white70),
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.all(10),
-            color: Colors.black54,
+
+          Positioned(
+            top: 250, left: 0, right: 0, bottom: 0,
             child: Column(
               children: [
-                Text(_statusText, style: GoogleFonts.orbitron(fontSize: 12, color: Colors.cyan)),
-                const SizedBox(height: 10),
-                TextField(
-                  controller: _messageController,
-                  style: TextStyle(color: Colors.cyan),
-                  decoration: InputDecoration(
-                    hintText: "Digite ou fale...",
-                    border: OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      icon: Icon(Icons.send, color: Colors.cyan),
-                      onPressed: () {
-                        if (_messageController.text.isNotEmpty) {
-                          _sendCommand(_messageController.text);
-                          _messageController.clear();
-                        }
+                Expanded(
+                  child: ShaderMask(
+                    shaderCallback: (Rect bounds) {
+                      return LinearGradient(
+                        begin: Alignment.topCenter, end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Colors.white, Colors.white, Colors.transparent],
+                        stops: [0.0, 0.1, 0.9, 1.0],
+                      ).createShader(bounds);
+                    },
+                    blendMode: BlendMode.dstIn,
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                      itemCount: _logs.length,
+                      itemBuilder: (context, index) {
+                        final log = _logs[index];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Text(
+                            log.isUser ? "> ${log.text}" : log.text,
+                            textAlign: log.isUser ? TextAlign.right : TextAlign.left,
+                            style: GoogleFonts.robotoMono(
+                              color: log.isUser ? Colors.white70 : Colors.cyanAccent,
+                              fontSize: 14,
+                              shadows: [Shadow(color: log.isUser ? Colors.transparent : Colors.cyan, blurRadius: 2)]
+                            ),
+                          ),
+                        );
                       },
+                    ),
+                  ),
+                ),
+                
+                // --- BARRA INFERIOR (INPUT + SPEED) ---
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: Colors.black87,
+                    border: Border(top: BorderSide(color: Colors.cyan.withOpacity(0.3))),
+                  ),
+                  child: SafeArea(
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _textInputController,
+                            style: GoogleFonts.robotoMono(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: "Comando...",
+                              hintStyle: TextStyle(color: Colors.white30),
+                              border: InputBorder.none,
+                              isDense: true,
+                            ),
+                            onSubmitted: (val) => _sendCommand(val),
+                          ),
+                        ),
+                        // BOTÃO VELOCIDADE (AQUI EMBAIXO)
+                        TextButton(
+                            onPressed: _cycleSpeed,
+                            style: TextButton.styleFrom(
+                                padding: EdgeInsets.symmetric(horizontal: 5),
+                                minimumSize: Size(40, 30),
+                                tapTargetSize: MaterialTapTargetSize.shrinkWrap
+                            ),
+                            child: Text(_rateLabel, style: GoogleFonts.orbitron(color: Colors.cyanAccent, fontWeight: FontWeight.bold, fontSize: 11))
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.send, color: Colors.cyan),
+                          onPressed: () => _sendCommand(_textInputController.text),
+                        ),
+                        IconButton(
+                          icon: Icon(Icons.mic, color: _isTalking ? Colors.red : Colors.white54),
+                          onPressed: () => _sendCommand("Jarvis"),
+                        ),
+                      ],
                     ),
                   ),
                 ),
               ],
             ),
-          )
-        ],
-      ),
-    );
-  }
-
-  void _showConfigDialog() {
-    showDialog(
-      context: context,
-      builder: (c) => AlertDialog(
-        title: Text("Configurar IP"),
-        content: TextField(controller: _urlController),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(c), child: Text("OK")),
-          TextButton(onPressed: _connectToServer, child: Text("Conectar")),
-        ],
-      ),
-    );
-  }
-}
-
-// --- GLOBO 3D NATIVO (REATOR ARK) ---
-
-class GlobeVisualizer extends StatefulWidget {
-  final bool isConnected;
-  final bool isTalking;
-
-  const GlobeVisualizer({super.key, required this.isConnected, required this.isTalking});
-
-  @override
-  State<GlobeVisualizer> createState() => _GlobeVisualizerState();
-}
-
-class _GlobeVisualizerState extends State<GlobeVisualizer> with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  final List<Point3D> _points = [];
-  final int _pointCount = 400; // Quantidade de partículas
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = AnimationController(vsync: this, duration: const Duration(seconds: 10))..repeat();
-    _generateSphere();
-  }
-
-  void _generateSphere() {
-    for (int i = 0; i < _pointCount; i++) {
-      // Distribuição Fibonacci na esfera
-      double y = 1 - (i / (_pointCount - 1)) * 2;
-      double radius = sqrt(1 - y * y);
-      double theta = 2.39996323 * i; // Golden Angle
-
-      double x = cos(theta) * radius;
-      double z = sin(theta) * radius;
-      _points.add(Point3D(x, y, z));
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        return CustomPaint(
-          size: const Size(300, 300),
-          painter: GlobePainter(
-            points: _points,
-            rotation: _controller.value * 2 * pi,
-            isConnected: widget.isConnected,
-            isTalking: widget.isTalking,
           ),
-        );
-      },
+
+          if (_holoImageBase64 != null)
+            Positioned(
+              top: 150, left: 20, right: 20, bottom: 150,
+              child: Center(
+                child: Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.cyanAccent, width: 1),
+                    color: Colors.black.withOpacity(0.9),
+                    boxShadow: [BoxShadow(color: Colors.cyan.withOpacity(0.3), blurRadius: 20)],
+                  ),
+                  padding: const EdgeInsets.all(2),
+                  child: Stack(
+                    children: [
+                      InteractiveViewer(child: Image.memory(base64Decode(_holoImageBase64!), fit: BoxFit.contain)),
+                      Positioned(
+                        top: 5, right: 5,
+                        child: IconButton(icon: Icon(Icons.close, color: Colors.red), onPressed: () => setState(() => _holoImageBase64 = null)),
+                      )
+                    ],
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
     );
   }
 }
 
-class Point3D {
-  double x, y, z;
-  Point3D(this.x, this.y, this.z);
-}
-
-class GlobePainter extends CustomPainter {
-  final List<Point3D> points;
-  final double rotation;
-  final bool isConnected;
-  final bool isTalking;
-
-  GlobePainter({required this.points, required this.rotation, required this.isConnected, required this.isTalking});
-
+// Pintores mantidos (GlobePainter, ParticleBackgroundPainter)...
+class ParticleBackgroundPainter extends CustomPainter {
+  final double time; final bool isTalking;
+  ParticleBackgroundPainter({required this.time, required this.isTalking});
   @override
   void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final paint = Paint()..strokeCap = StrokeCap.round;
-
-    double radius = size.width / 3;
-    if (isTalking) radius *= 1.2 + (sin(rotation * 10) * 0.05); // Pulsação ao falar
-
-    // Cor Base
-    Color baseColor = isConnected ? Colors.cyanAccent : Colors.redAccent;
-    if (isTalking) baseColor = Colors.cyan;
-
-    // Rotação Y
-    double cosR = cos(rotation);
-    double sinR = sin(rotation);
-
-    for (var point in points) {
-      // Rotação em Y
-      double x = point.x * cosR - point.z * sinR;
-      double z = point.z * cosR + point.x * sinR;
-      double y = point.y;
-
-      // Rotação lenta em X para dar tridimensionalidade extra
-      double tilt = 0.3;
-      double yRot = y * cos(tilt) - z * sin(tilt);
-      z = z * cos(tilt) + y * sin(tilt);
-      y = yRot;
-
-      // Projeção Perspectiva
-      double zScale = 1 / (2 - z); // Fator de profundidade
-      double pX = x * zScale * radius;
-      double pY = y * zScale * radius;
-
-      // Desenhar Ponto
-      double opacity = ((z + 1) / 2).clamp(0.1, 1.0); // Pontos de trás mais escuros
-      paint.color = baseColor.withOpacity(opacity * (isConnected ? 0.8 : 0.3));
-      
-      double dotSize = isTalking ? 3.0 : 2.0;
-      canvas.drawCircle(center + Offset(pX, pY), dotSize * zScale, paint);
-    }
-    
-    // Núcleo Brilhante
-    if (isConnected) {
-        paint.color = baseColor.withOpacity(0.1);
-        paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 20);
-        canvas.drawCircle(center, radius * 0.8, paint);
+    final paint = Paint()..color = const Color(0xFF00FFFF).withOpacity(0.15)..style = PaintingStyle.fill;
+    final random = Random(42); 
+    for (int i = 0; i < 50; i++) {
+      double x = (random.nextDouble() * size.width);
+      double y = (random.nextDouble() * size.height + time * 20) % size.height;
+      double r = random.nextDouble() * 2;
+      canvas.drawCircle(Offset(x, y), r, paint);
     }
   }
-
+  @override bool shouldRepaint(covariant ParticleBackgroundPainter old) => true;
+}
+class GlobePainter extends CustomPainter {
+  final double rotation; final bool isConnected; final bool isTalking;
+  GlobePainter({required this.rotation, required this.isConnected, required this.isTalking});
   @override
-  bool shouldRepaint(covariant GlobePainter oldDelegate) => true;
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2); final paint = Paint()..strokeCap = StrokeCap.round;
+    double radius = size.width / 3; if (isTalking) radius *= 1.05 + (sin(rotation * 20) * 0.05);
+    Color baseColor = isConnected ? const Color(0xFF00FFEA) : Colors.redAccent;
+    double cosR = cos(rotation); double sinR = sin(rotation);
+    for (int i = 0; i < 200; i++) {
+      double y = 1 - (i / 199) * 2; double r = sqrt(1 - y * y); double theta = 2.4 * i;
+      double x = cos(theta) * r; double z = sin(theta) * r;
+      double rx = x * cosR - z * sinR; double rz = z * cosR + x * sinR;
+      double pX = rx * radius; double pY = y * radius;
+      double opacity = ((rz + 1) / 2).clamp(0.1, 1.0);
+      paint.color = baseColor.withOpacity(opacity * (isConnected ? 0.8 : 0.3));
+      double dotSize = isTalking ? 2.5 : 1.5;
+      canvas.drawCircle(center + Offset(pX, pY), dotSize, paint);
+    }
+    paint.color = baseColor.withOpacity(0.05);
+    paint.maskFilter = const MaskFilter.blur(BlurStyle.normal, 10);
+    canvas.drawCircle(center, radius * 0.7, paint);
+  }
+  @override bool shouldRepaint(covariant GlobePainter old) => true;
 }

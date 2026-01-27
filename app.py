@@ -54,6 +54,14 @@ try:
 except ImportError:
     qrcode = None
 
+import argparse
+import logging
+
+# --- CONFIGURAÇÃO DE LOGS DETALHADOS (DEBUG) ---
+# Se for main, configuramos depois com base nos argumentos.
+# Mas definimos um padrão seguro aqui.
+logging.basicConfig(level=logging.INFO)
+
 LAST_USER_INPUT = {"text": "", "time": 0}
 LAST_PROCESSED_TEXT = ""
 LAST_PROCESSED_TIME = 0
@@ -590,7 +598,24 @@ def gerar_resposta_jarvis(user_id, texto):
         print(f"[ERRO FINANCAS] {e}")
         info_financeira = None
 
+    
+    # === GATILHO DE VÍDEO (INTEGRAÇÃO V27) ===
+    gatilhos_video = ["criar video", "criar vídeo", "fazer video", "fazer vídeo", "gerar video", "fazer clipe", "criar clipe", "video comercial", "video de venda"]
+    try:
+        path_video = r"D:\compartilhado\Projetos\jarvis01\automação_video"
+        if path_video not in sys.path: sys.path.append(path_video)
+        import video_director
+        if any(g in texto.lower() for g in gatilhos_video):
+            dados_v, msg_v = video_director.iniciar_processo_video(user_id, texto)
+            if msg_v:
+                adicionar_mensagem(user_id, "user", texto)
+                adicionar_mensagem(user_id, "assistant", msg_v)
+                return {"text": msg_v, "pdf": None}
+    except Exception as e_vid:
+        print(f"[ERRO VIDEO] {e_vid}")
+
     usuario = get_ou_criar_usuario(user_id)
+
     buffer_msgs = get_ultimas_mensagens(user_id, BUFFER_SIZE)
     saldo_atual = get_saldo(user_id)
     fatos = get_fatos(user_id)
@@ -665,10 +690,97 @@ CONTEXTO:
          return {"text": info_iot, "pdf": None}
 
     # --- LLM ---
+    # GATILHOS DE IMAGEM (Configuração prévia)
+    gatilhos_img = ["desenhe", "desenha", "gere uma imagem", "crie uma imagem", "faca uma imagem", "faça uma imagem", "criar foto", "gerar foto"]
+    texto_lower_check = texto.lower()
+    user_quer_imagem = any(g in texto_lower_check for g in gatilhos_img)
+
+    # PROMPT DE SISTEMA HARDCORE - DIRETIVIDADE MÁXIMA
+    # Se for IMAGEM, o prompt é focado puramente na descrição visual, IGNORANDO conversa fiada.
+    if user_quer_imagem:
+        system_prompt = f"""VOCÊ É UM EXPERT EM PROMPTS DE ARTE GENERATIVA (Midjourney/DALL-E).
+        
+        SUA MISSÃO AGORA: 
+        Criar um prompt para gerar uma NOVA imagem, garantindo que o gerador não reutilize ideias antigas.
+        
+        REGRAS:
+        1. O prompt DEVE começar OBRIGATORIAMENTE com: "Imagine uma nova imagem," ou "Crie do zero,".
+        2. Descreva a cena com riqueza de detalhes (luz, textura, estilo).
+        3. A resposta deve ser ESTRITAMENTE: "Gerando imagem..." seguido da tag [[GEN_IMG: <prompt>]]
+        
+        Exemplo:
+        Usuário: "desenha um avião"
+        Jarvis: "Gerando imagem... [[GEN_IMG: Imagine uma nova imagem do zero: Uma fotografia cinematográfica 8k de um avião supersônico voando sobre nuvens douradas, ultra realista.]]"
+        """
+        # Se for imagem, NÃO enviamos o histórico para não poluir
+        msgs = [{"role": "system", "content": system_prompt}, {"role": "user", "content": texto}]
+
+    else:
+        # PROMPT DE SISTEMA HARDCORE - DIRETIVIDADE MÁXIMA
+        system_prompt = f"""VOCÊ É O JARVIS. RESPONDA DIRETAMENTE.
+        
+        === DIRETRIZES DE RESPOSTA ===
+        1. **CONCISÃO (Padrão):** Para perguntas gerais, sua resposta DEVE ter no máximo 2 ou 3 parágrafos curtos (menos de 1000 caracteres). Seja direto e útil.
+        2. **PROFUNDIDADE (Apenas se pedido):** Apenas se o usuário pedir "pesquise", "detalhe", "explique a fundo", você pode dar respostas longas e complexas.
+        3. **CONTINUIDADE:** Se o usuário te interrompeu ou mudou de assunto, mantenha o contexto da conversa anterior se for relevante, mas priorize o novo comando.
+        
+        === GERAÇÃO DE IMAGEM (ENGENHARIA DE PROMPT) ===
+        Se o usuário pedir para CRIAR/GERAR/DESENHAR uma imagem:
+        1. NÃO pergunte detalhes. Crie você mesmo os detalhes visuais ricos.
+        2. Transforme o pedido simples em um PROMPT COMPLETO, DETALHADO E ARTÍSTICO.
+        3. Responda APENAS: "Gerando imagem..." e a tag [[GEN_IMG: <prompt_detalhado>]].
+        
+        Exemplo:
+        Usuário: "Desenhe um avião"
+        Jarvis: "Gerando imagem... [[GEN_IMG: fotografia cinematográfica 8k de um avião supersônico futurista voando sobre nuvens douradas durante o pôr do sol, iluminação volumétrica, ultra-realista]]"
+        
+        CONTEXTO:
+        {usuario['resumo_conversa']}
+        {fatos_texto}
+        {financas_contexto}
+        {info_iot if info_iot else ""}
+        {info_financeira if info_financeira else ""}
+        """
+        msgs = [{"role": "system", "content": system_prompt}] + [{"role": m["role"], "content": m["content"]} for m in buffer_msgs] + [{"role": "user", "content": texto}]
+    
+    # Injeção de instrução de imagem (Reforço)
+    if user_quer_imagem:
+        # Reforço extra caso o modelo ignore o system prompt
+        pass 
+
     try:
         resp = client.chat.completions.create(model=MODELO_ATIVO, messages=msgs)
         res_txt = resp.choices[0].message.content
         
+        # --- FILTRO AGRESSIVO DE PENSAMENTO/PREÂMBULO (REGEX GUILLOTINE) ---
+        res_txt = re.sub(r'<think>.*?</think>', '', res_txt, flags=re.DOTALL)
+        res_txt = re.sub(r'(?i)^(claro|certeza|aqui está|aqui esta|com certeza|entendido|ok|certo|veja bem|vou explicar|a resposta é)[:,\.]?\s*', '', res_txt.strip())
+        res_txt = re.sub(r'(?i)^(sure|certainly|here is|here are|okay|i can help|to answer)[:,\.]?\s*', '', res_txt.strip())
+        res_txt = res_txt.strip()
+
+        # --- BRIDGE WHATSAPP (Meta AI Trigger) ---
+        match_img = re.search(r'\[\[GEN_IMG:(.*?)\]\]', res_txt)
+        if match_img:
+            prompt_img = match_img.group(1).strip()
+            # Mapeia UserID para Whatsapp ID (Se possível)
+            target_wa = "5547999195027@c.us" # SEU NÚMERO PADRÃO
+            if "@c.us" in str(user_id): target_wa = user_id
+            
+            # --- BRIDGE UNIFICADA ---
+            # Sempre escreve o arquivo. O Node.js agora só usa esse método.
+            trigger_data = {
+                "prompt": prompt_img, 
+                "target": target_wa, 
+                "original_user_id": user_id, 
+                "timestamp": time.time()
+            }
+            try:
+                with open("meta_ai_trigger.json", "w", encoding='utf-8') as f:
+                    json.dump(trigger_data, f)
+                print(f"[BRIDGE] Trigger de imagem criado: {prompt_img[:30]}...")
+            except Exception as e_bridge:
+                print(f"[ERRO BRIDGE] {e_bridge}")
+
         # --- PDF TRIGGER ---
         pdf_gerado = None
         user_quer_pdf = any(x in texto_lower for x in ["pdf", "relatório", "extrato"])
@@ -894,7 +1006,6 @@ def api_whatsapp():
         chat_id = data.get('chat_id', sender)
         
         print(f"[WHATSAPP API] Sender: {sender} | ChatID: {chat_id}", flush=True)
-        print(f"[WHATSAPP API] Texto Base: '{texto}'", flush=True)
 
         with lock_chats:
             if chat_id not in chats_ativos: chats_ativos[chat_id] = {"processando": True, "fila": [], "resultados": []}
@@ -925,10 +1036,8 @@ def api_whatsapp():
 
         print(f"[WHATSAPP API] Gerando resposta...", flush=True)
         
-        # CHAMA BRAIN (Retorna DICT agora)
         resultado = gerar_resposta_jarvis(sender, texto)
         
-        # Normaliza resultado
         if isinstance(resultado, dict):
             res_txt = resultado.get('text', '...')
             pdf_anexo = resultado.get('pdf')
@@ -938,7 +1047,7 @@ def api_whatsapp():
 
         if not res_txt or not res_txt.strip(): res_txt = "..."
 
-        print(f"[WHATSAPP API] Resposta: {len(res_txt)} chars. PDF: {pdf_anexo}", flush=True)
+        print(f"[WHATSAPP API] Resposta: {len(res_txt)} chars.", flush=True)
         
         audios = gerar_multiplos_audios(res_txt)
 
@@ -947,7 +1056,6 @@ def api_whatsapp():
                 chats_ativos[chat_id]["processando"] = False
                 chats_ativos[chat_id]["resultados"].append({"response": res_txt, "audios": audios, "timestamp": time.time()})
 
-        # JSON Final
         response_data = {
             "response": res_txt,
             "audio_response": audios[0]["audio"] if audios else None,
@@ -956,7 +1064,6 @@ def api_whatsapp():
             "chat_id": chat_id
         }
         
-        # Anexo PDF (Base64)
         if pdf_anexo:
             pdf_path = os.path.join(STATIC_DIR, pdf_anexo)
             if os.path.exists(pdf_path):
@@ -968,16 +1075,35 @@ def api_whatsapp():
         return jsonify(response_data)
     except Exception as e:
         print(f"[WHATSAPP API] ERRO CRÍTICO: {e}", flush=True)
-        import traceback; traceback.print_exc()
         return jsonify({"response": "Erro interno no servidor Jarvis.", "error": str(e)}), 500
+
+# --- NOVA ROTA: RECEBER IMAGEM DO NODE.JS (BRIDGE RETORNO) ---
+@app.route('/api/receive_image', methods=['POST'])
+def api_receive_image():
+    try:
+        data = request.json
+        user_id = data.get('user_id', 'Mestre')
+        image_b64 = data.get('image') # Base64 puro
+        caption = data.get('caption', 'Imagem Gerada')
+
+        print(f"[BRIDGE RETORNO] Recebendo imagem para: {user_id}", flush=True)
+        
+        # Envia para o Cliente via SocketIO
+        socketio.emit('bot_image_event', {
+            'image': image_b64, 
+            'caption': caption,
+            'user_id': user_id
+        })
+        
+        return jsonify({"status": "ok"})
+    except Exception as e:
+        print(f"[ERRO BRIDGE RETORNO] {e}")
+        return jsonify({"error": str(e)}), 500
 
 @socketio.on('fala_usuario')
 def handle_web(data):
-    # Identificação Única de Sessão (Web/Mobile)
-    # Se o cliente mandar user_id, usa. Se não, usa o ID da sessão do socket (único por aba/conexão)
     user_id = data.get('user_id')
     if not user_id or user_id == "Patrick":
-        # Prefixo 'web_' para diferenciar visualmente no banco
         user_id = f"web_{request.sid[:8]}" 
     
     print(f"[WEB/SOCKET] Processando mensagem de: {user_id}")
@@ -1037,30 +1163,35 @@ def handle_active_command(data):
     text = data.get('text', '').strip()
     if not text: return
 
-    # --- 1. Lógica de "Barge-in" (Interrupção) ---
-    texto_lower = text.lower()
-    comandos_parada = ["pare", "parar", "silêncio", "silencio", "stop", "chega", "fique quieto"]
+    texto_lower = text.lower().strip()
     
-    # Se disser APENAS "Jarvis", ou comandos de parada
-    if texto_lower == "jarvis" or any(cmd == texto_lower for cmd in comandos_parada) or "jarvis, pare" in texto_lower:
-        print(f"[INTERRUPÇÃO] Comando de parada recebido: {text}")
-        socketio.emit('force_stop_playback', {'user_id': user_id}) # Cliente deve tratar isso parando o player
+    # --- 1. Lógica de "Barge-in" (Interrupção - PRIORIDADE TOTAL) ---
+    texto_limpo = re.sub(r'[^\w\s]', '', texto_lower)
+    comandos_parada = ["pare", "parar", "silêncio", "silencio", "stop", "chega", "fique quieto", "cala a boca", "apenas isso"]
+    is_stop_command = (texto_limpo == "jarvis") or (texto_limpo in comandos_parada) or ("jarvis pare" in texto_limpo)
+    
+    if is_stop_command:
+        print(f"[INTERRUPÇÃO] Comando de parada IMEDIATA: {text}")
+        socketio.emit('force_stop_playback', {'user_id': user_id}) 
         return
 
-    # --- 2. Cancelamento de Eco (Auto-escuta) ---
+    # --- 2. Cancelamento de Eco (Auto-escuta - SILENCIOSO) ---
+    # Verifica ANTES de logar ou processar
     if LAST_BOT_RESPONSE:
+        # Verifica similaridade
         ratio = SequenceMatcher(None, texto_lower, LAST_BOT_RESPONSE.lower()).ratio()
-        if ratio > 0.85: # 85% de similaridade
-            print(f"[ECO DETECTADO] Ignorando entrada (Similaridade: {ratio:.2f}): '{text}'")
-            return
-        # Verifica se o texto ouvido está contido na última resposta (comum em ecos parciais)
+        if ratio > 0.80: # 80% similar
+             # Drop silencioso (não printa nada para não poluir log)
+             return
+        # Verifica contensão (eco parcial comum)
         if len(text) > 15 and text.lower() in LAST_BOT_RESPONSE.lower():
-             print(f"[ECO PARCIAL] Ignorando entrada contida na resposta anterior: '{text}'")
              return
 
     tempo_atual = time.time()
     if text == LAST_USER_INPUT["text"] and (tempo_atual - LAST_USER_INPUT["time"] < 3.0): return
     LAST_USER_INPUT = {"text": text, "time": tempo_atual}
+    
+    # SÓ AGORA LOGA O COMANDO
     print(f"\n[COMANDO RECEBIDO] {user_id}: {text}")
 
     try: adicionar_mensagem(user_id, "user", text)
@@ -1131,10 +1262,21 @@ def gerar_qrcode_conexao(url):
     except: pass
 
 if __name__ == '__main__':
-    import logging
+    # Parse de Argumentos para Modo Debug
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--no-bot', action='store_true', help='Não iniciar o bot WhatsApp automaticamente (Útil para debug)')
+    parser.add_argument('--port', type=int, default=5000, help='Porta do servidor')
+    parser.add_argument('--debug', action='store_true', help='Ativar modo debug flask')
+    args = parser.parse_args()
+
+    # Configuração de Logs
     logging.getLogger('werkzeug').setLevel(logging.ERROR)
     logging.getLogger('socketio').setLevel(logging.ERROR)
     logging.getLogger('engineio').setLevel(logging.ERROR)
+    
+    if args.debug:
+        print("[DEBUG] Modo Verbose Ativado")
+        logging.getLogger().setLevel(logging.DEBUG)
 
     print("\n" * 2)
     print("=========================================")
@@ -1144,7 +1286,7 @@ if __name__ == '__main__':
     print("[REDE] Iniciando Tunel Cloudflare...", flush=True)
     try:
         from pycloudflared import try_cloudflare
-        public_url_obj = try_cloudflare(port=5000)
+        public_url_obj = try_cloudflare(port=args.port)
         public_url = public_url_obj.tunnel
         print(f"\nACESSO REMOTO LIBERADO: {public_url}\n", flush=True)
 
@@ -1153,14 +1295,31 @@ if __name__ == '__main__':
         gerar_qrcode_conexao(public_url)
     except:
         print("[REDE] Fallback Local", flush=True)
-        gerar_qrcode_conexao("http://localhost:5000")
+        gerar_qrcode_conexao(f"http://localhost:{args.port}")
 
     def start_zap():
-        print("[SISTEMA] Disparando integração WhatsApp...", flush=True)
+        print("[SISTEMA] Iniciando Módulo WhatsApp (Integrado)...", flush=True)
         try:
-            subprocess.Popen(["cmd", "/c", "start", "INICIAR_WHATSAPP.bat"], shell=True, cwd=BASE_DIR)
-        except Exception as e: print(f"[ERRO] Falha Zap: {e}")
+            # Caminho absoluto para a pasta do bot
+            zap_dir = os.path.join(BASE_DIR, "jarvis-mcp-whatsapp")
+            
+            # Verifica se o node_modules existe, senão avisa (mas tenta rodar)
+            if not os.path.exists(os.path.join(zap_dir, "node_modules")):
+                print("[AVISO] Pasta node_modules não encontrada em jarvis-mcp-whatsapp. O bot pode falhar.", flush=True)
 
-    threading.Thread(target=start_zap, daemon=True).start()
+            # Executa o NODE diretamente em background
+            # shell=True permite que o Windows encontre o comando 'node' no PATH
+            subprocess.Popen(["node", "index.js"], cwd=zap_dir, shell=True)
+            print("[SISTEMA] WhatsApp Bot rodando em background (Pid controlado pelo SO).", flush=True)
+            
+        except Exception as e: 
+            print(f"[ERRO CRÍTICO] Falha ao iniciar subsistema WhatsApp: {e}", flush=True)
+
+    # Só inicia o bot se a flag --no-bot NÃO for passada
+    if not args.no_bot:
+        threading.Thread(target=start_zap, daemon=True).start()
+    else:
+        print("[SISTEMA] MODO MANUAL: O Bot WhatsApp NÃO será iniciado automaticamente.", flush=True)
+
     print("[SISTEMA] Servidor Online.", flush=True)
-    socketio.run(app, debug=False, port=5000, host='0.0.0.0', allow_unsafe_werkzeug=True)
+    socketio.run(app, debug=False, port=args.port, host='0.0.0.0', allow_unsafe_werkzeug=True)

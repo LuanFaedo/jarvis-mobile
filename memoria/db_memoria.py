@@ -7,6 +7,7 @@ Sistema de Memória Jarvis com SQLite
 
 import sqlite3
 import os
+import shutil
 from datetime import datetime
 from typing import List, Dict, Optional
 
@@ -17,8 +18,21 @@ def get_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def fazer_backup_banco():
+    """Cria uma cópia de segurança do banco de dados ao iniciar"""
+    if os.path.exists(DB_PATH):
+        backup_path = f"{DB_PATH}.bak"
+        try:
+            shutil.copy2(DB_PATH, backup_path)
+            # print(f"[BACKUP] Banco de dados salvo em: {backup_path}")
+        except Exception as e:
+            print(f"[BACKUP] Falha: {e}")
+
 def init_database():
     """Inicializa o banco de dados com as tabelas necessárias"""
+    # Executa backup antes de qualquer operação
+    fazer_backup_banco()
+
     conn = get_connection()
     cursor = conn.cursor()
 
@@ -60,7 +74,7 @@ def init_database():
         )
     """)
 
-    # Tabela financeiro
+    # Tabela financeira
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS financeiro (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +96,51 @@ def init_database():
         )
     """)
 
-    # Tabela de diário de voz (Gravação Integral) - ADICIONADO AGORA
+    # Tabela de Metas (Orçamento)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS metas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            valor_limite REAL NOT NULL,
+            periodo TEXT DEFAULT 'mensal', -- 'mensal', 'semanal', 'anual'
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES usuarios(user_id),
+            UNIQUE(user_id, categoria, periodo)
+        )
+    """)
+
+    # Tabela de Objetivos (Cofrinhos)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS objetivos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            valor_alvo REAL NOT NULL,
+            valor_atual REAL DEFAULT 0.0,
+            data_alvo DATE,
+            status TEXT DEFAULT 'ativo', -- 'ativo', 'concluido', 'pausado'
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES usuarios(user_id)
+        )
+    """)
+
+    # Tabela de Assinaturas (Recorrência)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS assinaturas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            nome TEXT NOT NULL,
+            valor REAL NOT NULL,
+            dia_vencimento INTEGER NOT NULL,
+            ativo BOOLEAN DEFAULT 1,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES usuarios(user_id),
+            UNIQUE(user_id, nome)
+        )
+    """)
+
+    # Tabela de diário de voz (Gravação Integral)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS diario_voz (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -150,6 +208,7 @@ def adicionar_mensagem(user_id: str, role: str, content: str):
     conn.close()
 
 def get_ultimas_mensagens(user_id: str, limite: int = 10) -> List[Dict]:
+    """Retorna as últimas N mensagens do usuário"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -171,6 +230,7 @@ def contar_mensagens(user_id: str) -> int:
     return count
 
 def get_mensagens_para_resumir(user_id: str, offset: int, limite: int) -> List[Dict]:
+    """Pega mensagens antigas para criar resumo"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -184,6 +244,7 @@ def get_mensagens_para_resumir(user_id: str, offset: int, limite: int) -> List[D
     return [{"role": r["role"], "content": r["content"]} for r in rows]
 
 def limpar_mensagens_antigas(user_id: str, manter_ultimas: int = 10):
+    """Remove mensagens antigas, mantendo apenas as últimas N"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -198,6 +259,7 @@ def limpar_mensagens_antigas(user_id: str, manter_ultimas: int = 10):
 # ===================== FATOS (MEMÓRIA PERMANENTE) =====================
 
 def salvar_fato(user_id: str, tipo: str, chave: str, valor: str):
+    """Salva um fato na memória permanente (upsert)"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
@@ -209,12 +271,21 @@ def salvar_fato(user_id: str, tipo: str, chave: str, valor: str):
     conn.close()
 
 def get_fatos(user_id: str, tipo: Optional[str] = None) -> List[Dict]:
+    """Retorna fatos do usuário, opcionalmente filtrados por tipo"""
     conn = get_connection()
     cursor = conn.cursor()
+
     if tipo:
-        cursor.execute("SELECT tipo, chave, valor FROM fatos WHERE user_id = ? AND tipo = ?", (user_id, tipo))
+        cursor.execute(
+            "SELECT tipo, chave, valor FROM fatos WHERE user_id = ? AND tipo = ?",
+            (user_id, tipo)
+        )
     else:
-        cursor.execute("SELECT tipo, chave, valor FROM fatos WHERE user_id = ?", (user_id,))
+        cursor.execute(
+            "SELECT tipo, chave, valor FROM fatos WHERE user_id = ?",
+            (user_id,)
+        )
+
     rows = cursor.fetchall()
     conn.close()
     return [{"tipo": r["tipo"], "chave": r["chave"], "valor": r["valor"]} for r in rows]
@@ -222,7 +293,10 @@ def get_fatos(user_id: str, tipo: Optional[str] = None) -> List[Dict]:
 def remover_fato(user_id: str, tipo: str, chave: str):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM fatos WHERE user_id = ? AND tipo = ? AND chave = ?", (user_id, tipo, chave))
+    cursor.execute(
+        "DELETE FROM fatos WHERE user_id = ? AND tipo = ? AND chave = ?",
+        (user_id, tipo, chave)
+    )
     conn.commit()
     conn.close()
 
@@ -269,13 +343,102 @@ def get_transacoes(user_id: str, limite: int = 20) -> List[Dict]:
     conn.close()
     return [dict(r) for r in rows]
 
+# ===================== METAS & OBJETIVOS =====================
+
+def definir_meta(user_id: str, categoria: str, valor: float, periodo: str = 'mensal'):
+    """Define ou atualiza uma meta de gastos"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO metas (user_id, categoria, valor_limite, periodo) VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, categoria, periodo) DO UPDATE SET valor_limite = ?""",
+        (user_id, categoria, valor, periodo, valor)
+    )
+    conn.commit()
+    conn.close()
+
+def get_metas(user_id: str) -> List[Dict]:
+    """Retorna todas as metas do usuário"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT categoria, valor_limite, periodo FROM metas WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def criar_objetivo(user_id: str, nome: str, valor_alvo: float, data_alvo: str = None):
+    """Cria um novo objetivo financeiro (cofrinho)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO objetivos (user_id, nome, valor_alvo, data_alvo) VALUES (?, ?, ?, ?)",
+        (user_id, nome, valor_alvo, data_alvo)
+    )
+    conn.commit()
+    conn.close()
+
+def atualizar_objetivo(user_id: str, nome_objetivo: str, valor_adicionado: float):
+    """Adiciona valor a um objetivo existente pelo nome"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE objetivos SET valor_atual = valor_atual + ? WHERE nome = ? AND user_id = ?",
+        (valor_adicionado, nome_objetivo, user_id)
+    )
+    conn.commit()
+    conn.close()
+
+def get_objetivos(user_id: str) -> List[Dict]:
+    """Lista objetivos do usuário"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nome, valor_alvo, valor_atual, status FROM objetivos WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+# ===================== ASSINATURAS (RECORRÊNCIA) =====================
+
+def adicionar_assinatura(user_id: str, nome: str, valor: float, dia_vencimento: int):
+    """Adiciona ou atualiza uma assinatura recorrente"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """INSERT INTO assinaturas (user_id, nome, valor, dia_vencimento) VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, nome) DO UPDATE SET valor = ?, dia_vencimento = ?, ativo = 1""",
+        (user_id, nome, valor, dia_vencimento, valor, dia_vencimento)
+    )
+    conn.commit()
+    conn.close()
+
+def get_assinaturas(user_id: str) -> List[Dict]:
+    """Lista assinaturas ativas"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT nome, valor, dia_vencimento FROM assinaturas WHERE user_id = ? AND ativo = 1 ORDER BY dia_vencimento ASC", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def remover_assinatura(user_id: str, nome: str):
+    """Desativa uma assinatura (soft delete)"""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("UPDATE assinaturas SET ativo = 0 WHERE user_id = ? AND nome LIKE ?", (user_id, f"%{nome}%"))
+    conn.commit()
+    conn.close()
+
 # ===================== UTILIDADES =====================
 
 def limpar_memoria_usuario(user_id: str):
+    """Limpa toda a memória de um usuário"""
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("DELETE FROM mensagens WHERE user_id = ?", (user_id,))
     cursor.execute("DELETE FROM fatos WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM metas WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM objetivos WHERE user_id = ?", (user_id,))
+    cursor.execute("DELETE FROM assinaturas WHERE user_id = ?", (user_id,))
     cursor.execute("UPDATE usuarios SET resumo_conversa = 'Memória reiniciada.' WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()

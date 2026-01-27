@@ -17,3 +17,4 @@ pyautogui
 duckduckgo-search
 beautifulsoup4
 qrcode
+fpdf

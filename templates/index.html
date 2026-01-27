@@ -168,9 +168,10 @@
 
                 let intensity = 0;
                 if (window.currentAudio && !window.currentAudio.paused) {
-                    intensity = 1.5; 
+                    intensity = 2.5; // MAIS INTENSO
                     sphere.material.color.setHex(0x00ffff);
-                    sphere.material.size = 0.2;
+                    sphere.material.size = 0.25;
+                    sphere.rotation.y += 0.02; // Gira mais rápido
                 } else if (document.getElementById('mic-btn') && document.getElementById('mic-btn').classList.contains('listening')) {
                      intensity = 0.5;
                      sphere.material.color.setHex(0xffae00);

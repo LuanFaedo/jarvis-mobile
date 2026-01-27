@@ -1,20 +1,20 @@
 @echo off
-echo Deletando arquivo "nul" da pasta C:\WORD...
+echo Deletando arquivo "nul" da pasta D:\compartilhado\Projetos\jarvis01\jarvis-mobile01...
 echo.
 
 REM Metodo 1: Caminho longo
-del "\\?\C:\WORD\nul" 2>NUL
+del "\\?\D:\compartilhado\Projetos\jarvis01\jarvis-mobile01\nul" 2>NUL
 
 REM Metodo 2: Renomear primeiro
-ren "\\?\C:\WORD\nul" "temp_delete.tmp" 2>NUL
+ren "\\?\D:\compartilhado\Projetos\jarvis01\jarvis-mobile01\nul" "temp_delete.tmp" 2>NUL
 del "C:\WORD\temp_delete.tmp" 2>NUL
 
 REM Metodo 3: Forcar com attrib
-attrib -r -s -h "\\?\C:\WORD\nul" 2>NUL
-del "\\?\C:\WORD\nul" 2>NUL
+attrib -r -s -h "\\?\D:\compartilhado\Projetos\jarvis01\jarvis-mobile01\nul" 2>NUL
+del "\\?\D:\compartilhado\Projetos\jarvis01\jarvis-mobile01\nul" 2>NUL
 
 echo.
-if exist "C:\WORD\nul" (
+if exist "D:\compartilhado\Projetos\jarvis01\jarvis-mobile01\nul" (
     echo [FALHOU] O arquivo ainda existe. Execute como Administrador.
 ) else (
     echo [SUCESSO] Arquivo deletado!

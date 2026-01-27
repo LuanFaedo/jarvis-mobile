@@ -1,9 +1,182 @@
-[MEMÓRIA] Conectado ao Cérebro Externo em: D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP
 [DB] Banco de dados inicializado
-[ERRO IMPORT] Falha ao carregar memória externa: cannot import name 'salvar_diario_voz' from 'memoria.db_memoria' (D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP\memoria\db_memoria.py). Tentando fallback local...
-Traceback (most recent call last):
-  File "C:\WORD\app.py", line 1060, in <module>
-    from sistema.auditoria import registrar_input_usuario, gravar_diario_voz
-  File "C:\WORD\sistema\auditoria.py", line 2, in <module>
-    from memoria.db_memoria import salvar_diario_voz as db_salvar_voz
-ImportError: cannot import name 'salvar_diario_voz' from 'memoria.db_memoria' (D:\compartilhado\Projetos\jarvis01\jarvizsql-FINANEIRO-ZAP\memoria\db_memoria.py)
+[SISTEMA] Memória SQLite carregada com sucesso.
+
+
+
+=========================================
+   JARVIS V12 - SISTEMA INTEGRADO
+=========================================
+[REDE] Iniciando Tunel Cloudflare...
+ * Running on https://robertson-gem-recruiting-replace.trycloudflare.com
+ * Traffic stats available on http://127.0.0.1:20245/metrics
+
+ACESSO REMOTO LIBERADO: https://robertson-gem-recruiting-replace.trycloudflare.com
+
+[SISTEMA] MODO MANUAL: O Bot WhatsApp NÃO será iniciado automaticamente.
+[SISTEMA] Servidor Online.
+ * Serving Flask app 'app'
+ * Debug mode: off
+
+[WHATSAPP API] --- Nova Requisição ---
+[WHATSAPP API] Sender: Patrick | ChatID: 5547999195027@c.us
+[WHATSAPP API] Gerando resposta...
+[WHATSAPP API] Resposta: 33 chars.
+[AUDIO] Gerando voz para: Olá! Como posso ajudar você hoje?...
+
+[WHATSAPP API] --- Nova Requisição ---
+[WHATSAPP API] Sender: 89559329177782@lid | ChatID: 89559329177782@lid
+[WHATSAPP API] Gerando resposta...
+[WHATSAPP API] Resposta: 35 chars.
+[AUDIO] Gerando voz para: Olá! Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: tá me escutando
+[AUDIO] Gerando voz para: Estou te escutando, sim! O que você precisa ou gos...
+
+[COMANDO RECEBIDO] Mestre: consegue saber qual
+[AUDIO] Gerando voz para: ! Sobre o que exatamente você gostaria de saber? P...
+
+[COMANDO RECEBIDO] Mestre: música
+[AUDIO] Gerando voz para: ! Aqui vão algumas opções, me avisa qual delas te ...
+
+[COMANDO RECEBIDO] Mestre: existe na pasta atual
+[AUDIO] Gerando voz para: Não tenho acesso a um sistema de arquivos real aqu...
+
+[COMANDO RECEBIDO] Mestre: Olá
+[AUDIO] Gerando voz para: Olá! Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: como está
+[AUDIO] Gerando voz para: Estou bem, pronto para ajudar! Como posso ser útil...
+
+[COMANDO RECEBIDO] Mestre: Que hora que é agora
+[AUDIO] Gerando voz para: São 12 horas e 32 minutos....
+
+[COMANDO RECEBIDO] Mestre: que horas que é agora
+[AUDIO] Gerando voz para: São 12 horas e 32 minutos....
+
+[COMANDO RECEBIDO] Mestre: Qual a velocidade
+[AUDIO] Gerando voz para: Não tenho como medir exatamente a velocidade da co...
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+
+[COMANDO RECEBIDO] Mestre: está na escuta
+[AUDIO] Gerando voz para: Sim, estou ouvindo você....
+
+[COMANDO RECEBIDO] Mestre: som
+[AUDIO] Gerando voz para: Estou aqui na escuta. Qual som você gostaria de ou...
+
+[COMANDO RECEBIDO] Mestre: vejo vocês lá dentro
+[AUDIO] Gerando voz para: Entendi, você está vendo algo por dentro. Quer que...
+
+[COMANDO RECEBIDO] Mestre: engraçado quando eles pega um manequim dele que ele conversa
+[AUDIO] Gerando voz para: Pelo que entendi, você achou curioso quando pegam ...
+
+[COMANDO RECEBIDO] Mestre: Oi
+[AUDIO] Gerando voz para: Oi! Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: dispositivo
+[AUDIO] Gerando voz para: ! Sobre qual dispositivo você gostaria de saber ma...
+
+[COMANDO RECEBIDO] Mestre: Olá
+[AUDIO] Gerando voz para: Olá! Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: que horas que é agora
+[AUDIO] Gerando voz para: São 15 horas e 24 minutos....
+
+[COMANDO RECEBIDO] Mestre: como
+[AUDIO] Gerando voz para: The user says como. Might be asking como meaning h...
+
+[COMANDO RECEBIDO] Mestre: mudo o saída de áudio do meu celular
+[AUDIO] Gerando voz para: Para mudar a saída de áudio do seu celular, o proc...
+
+[COMANDO RECEBIDO] Mestre: tá me escutando
+[AUDIO] Gerando voz para: Estou escutando você. Como posso ajudar?...
+
+[COMANDO RECEBIDO] Mestre: olá olá
+[AUDIO] Gerando voz para: Olá! Como posso ajudar hoje?...
+
+[COMANDO RECEBIDO] Mestre: voz alterada com sucesso
+[AUDIO] Gerando voz para: Ótimo, a voz foi alterada com sucesso! . Se precis...
+
+[COMANDO RECEBIDO] Mestre: que horas que são agora
+[AUDIO] Gerando voz para: São 16 horas e 22 minutos....
+
+[COMANDO RECEBIDO] Mestre: pesquisar na internet
+[AUDIO] Gerando voz para: ! Sobre o que você gostaria que eu fizesse a pesqu...
+
+[COMANDO RECEBIDO] Mestre: jw.org
+[AUDIO] Gerando voz para: We need to browse....
+
+[COMANDO RECEBIDO] Mestre: escutando
+[AUDIO] Gerando voz para: Estou escutando você. Como posso ajudar?...
+
+[COMANDO RECEBIDO] Mestre: voz alterada com sucesso
+[AUDIO] Gerando voz para: Ótimo! A alteração da voz foi concluída com sucess...
+
+[COMANDO RECEBIDO] Mestre: alterada com sucesso
+[AUDIO] Gerando voz para: Perfeito, a voz já está alterada. . Se precisar de...
+
+[COMANDO RECEBIDO] Mestre: você já pode conversar com ele
+[AUDIO] Gerando voz para: estou pronto para conversar com quem você quiser. ...
+
+[COMANDO RECEBIDO] Mestre: você já
+[AUDIO] Gerando voz para: Sim, já estou aqui. Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: Olá
+[AUDIO] Gerando voz para: Olá! Como posso ajudar você hoje?...
+
+[COMANDO RECEBIDO] Mestre: tudo bem Como você está hoje Charles
+[AUDIO] Gerando voz para: Olá! Estou bem, obrigado por perguntar. Como posso...
+
+[COMANDO RECEBIDO] Mestre: eu
+[AUDIO] Gerando voz para: Estou aqui e pronto para ajudar. O que você gostar...
+
+[COMANDO RECEBIDO] Mestre: testar sua capacidade de
+[AUDIO] Gerando voz para: Estou à disposição para o teste. O que você gostar...
+
+[COMANDO RECEBIDO] Mestre: Obrigada Que tal você me explicar sobre computação em nuvem
+[AUDIO] Gerando voz para: ! A computação em nuvem ou cloud computing é um mo...
+
+[COMANDO RECEBIDO] Mestre: ?
+[AUDIO] Gerando voz para: ! Há algum ponto específico da computação em nuvem...
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+
+[COMANDO RECEBIDO] Mestre: você gostaria de saber mais sobre as outras opções ou Como configurar
+[AUDIO] Gerando voz para: ! Vou dividir a resposta em duas partes . . 1 Outr...
+
+[COMANDO RECEBIDO] Mestre: combinado é só me dizer o que quer que eu mande de mensagem
+[AUDIO] Gerando voz para: ! Vou sugerir alguns modelos de mensagem que você ...
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+
+[COMANDO RECEBIDO] Mestre: quais são
+[AUDIO] Gerando voz para: Aqui estão as principais opções que você pode esco...
+[INTERRUPÇÃO] Comando de parada IMEDIATA: Jarvis
+
+[COMANDO RECEBIDO] Mestre: aí
+[AUDIO] Gerando voz para: Entendi! Como posso ajudar você agora? Precisa de ...
+
+[COMANDO RECEBIDO] Mestre: pesquise jw.org
+[AUDIO] Gerando voz para: Desculpe, mas não posso fazer pesquisas na interne...
+
+[COMANDO RECEBIDO] Mestre: tá falando comigo
+[AUDIO] Gerando voz para: Sim, estou ouvindo. Como posso ajudar?...
+
+[COMANDO RECEBIDO] Mestre: tem acesso a internet?
+[AUDIO] Gerando voz para: Não, eu não consigo acessar a internet em tempo re...
+
+[COMANDO RECEBIDO] Mestre: está me escutando
+[AUDIO] Gerando voz para: Sim, estou te escutando. Como posso ajudar?...
+
+[COMANDO RECEBIDO] Mestre: que horas que são
+[AUDIO] Gerando voz para: São 18 horas e 28 minutos....
+
+[COMANDO RECEBIDO] Mestre: você tem acesso à internet
+[AUDIO] Gerando voz para: Não, eu não consigo acessar a internet em tempo re...
+
+[COMANDO RECEBIDO] Mestre: O que você pode fazer
+[AUDIO] Gerando voz para: Posso ajudar de várias formas, como. . - Responder...
+
+[COMANDO RECEBIDO] Mestre: eu sei
+[AUDIO] Gerando voz para: ! Se precisar de algo, é só chamar....

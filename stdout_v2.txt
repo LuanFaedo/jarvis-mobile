@@ -1,0 +1,9 @@
+[DB] Banco de dados inicializado
+[SISTEMA] Memória SQLite carregada com sucesso.
+
+
+
+=========================================
+   JARVIS V12 - SISTEMA INTEGRADO
+=========================================
+[REDE] Iniciando Tunel Cloudflare...
